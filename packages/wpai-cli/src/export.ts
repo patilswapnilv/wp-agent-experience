@@ -90,10 +90,17 @@ export function exportForProduction(options: ExportOptions): ExportResult {
     skippedSteps.push({ location, step, reason, blocking });
   };
 
+  const buildOptionUpdateCommand = (key: string, value: unknown): string => {
+    if (value === null || typeof value === 'object' || typeof value === 'boolean') {
+      return `wp option update ${shellEscapeSingle(key)} ${shellEscapeSingle(JSON.stringify(value))} --format=json`;
+    }
+    return `wp option update ${shellEscapeSingle(key)} ${shellEscapeSingle(String(value))}`;
+  };
+
   // 1. Top-level siteOptions -> wp option update
   if (bp.siteOptions && typeof bp.siteOptions === 'object') {
     for (const [k, v] of Object.entries(bp.siteOptions)) {
-      wpCliCommands.push(`wp option update ${shellEscapeSingle(k)} ${shellEscapeSingle(String(v))}`);
+      wpCliCommands.push(buildOptionUpdateCommand(k, v));
     }
   }
 
@@ -188,7 +195,7 @@ export function exportForProduction(options: ExportOptions): ExportResult {
         const opts = step.options;
         if (opts && typeof opts === 'object') {
           for (const [k, v] of Object.entries(opts as Record<string, unknown>)) {
-            wpCliCommands.push(`wp option update ${shellEscapeSingle(k)} ${shellEscapeSingle(String(v))}`);
+            wpCliCommands.push(buildOptionUpdateCommand(k, v));
           }
         } else {
           skip(location, name, 'No options object; nothing exported.');

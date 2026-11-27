@@ -447,6 +447,55 @@ describe('wpai export (production handoff bridge)', () => {
     }
   });
 
+  it('serializes structured option values with --format=json in both siteOptions and setSiteOptions', () => {
+    const srcDir = tmp('wpai-exp-src-');
+    const outDir = tmp('wpai-exp-out-');
+    try {
+      writeBlueprint(srcDir, {
+        siteOptions: {
+          blogname: 'Plain Site',
+          top_level_cfg: { enabled: true, retries: 3 },
+        },
+        steps: [
+          {
+            step: 'setSiteOptions',
+            options: {
+              my_plugin_settings: { enabled: true, tags: ['a', 'b'] },
+              feature_flag: false,
+            },
+          },
+        ],
+      });
+      const res = exportForProduction({ target: srcDir, outDir });
+      assert.equal(res.ok, true);
+      assert.equal(res.complete, true);
+      assert.ok(
+        res.wp_cli_commands.includes("wp option update 'blogname' 'Plain Site'"),
+        'scalar string options stay plaintext'
+      );
+      assert.ok(
+        res.wp_cli_commands.includes(
+          `wp option update 'top_level_cfg' '{"enabled":true,"retries":3}' --format=json`
+        ),
+        'top-level structured siteOptions must use --format=json'
+      );
+      assert.ok(
+        res.wp_cli_commands.includes(
+          `wp option update 'my_plugin_settings' '{"enabled":true,"tags":["a","b"]}' --format=json`
+        ),
+        'setSiteOptions structured values must use --format=json'
+      );
+      assert.ok(
+        res.wp_cli_commands.includes("wp option update 'feature_flag' 'false' --format=json"),
+        'boolean option values must use --format=json'
+      );
+      assert.ok(!res.wp_cli_commands.some((c) => c.includes('[object Object]')));
+    } finally {
+      fs.rmSync(srcDir, { recursive: true, force: true });
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('flags untranslatable writeFile, plugin/theme sources, constants, and unknown steps as blocking', () => {
     const srcDir = tmp('wpai-exp-src-');
     const outDir = tmp('wpai-exp-out-');
