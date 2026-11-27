@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { exportForProduction } from './export.js';
 import { runMcpStdioServer } from './mcp.js';
+import { getPackageVersion } from './paths.js';
 import { bootBlueprint, verifyBlueprint } from './playground.js';
 import { initProject, isValidPreset } from './presets.js';
 import { evaluateFit, loadRegistry, validateRegistry } from './registry.js';
 import { PRESET_NAMES } from './types.js';
 import { validateBlueprintFile } from './validator.js';
 
-const VERSION = '0.2.0';
+const VERSION = getPackageVersion();
 
 interface ParsedArgs {
   positionals: string[];

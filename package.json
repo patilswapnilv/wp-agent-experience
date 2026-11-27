@@ -18,7 +18,8 @@
   "scripts": {
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
-    "validate": "node packages/wpai-cli/dist/cli.js validate-registry && node -e \"import('node:fs').then(async fs => { const { execFileSync } = await import('node:child_process'); const path = await import('node:path'); const dir = path.resolve('blueprints'); if (!fs.existsSync(dir)) return; for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { if (!entry.isDirectory()) continue; const bp = path.join(dir, entry.name, 'blueprint.json'); if (fs.existsSync(bp)) execFileSync(process.execPath, ['packages/wpai-cli/dist/cli.js', 'validate', bp], { stdio: 'inherit' }); } })\"",
+    "test:pack": "npm run test:pack --workspaces",
+    "validate": "node packages/wpai-cli/dist/cli.js validate-registry registry/wp-capabilities.json --schema registry/schema/wp-capabilities.schema.json && node -e \"import('node:fs').then(async fs => { const { execFileSync } = await import('node:child_process'); const path = await import('node:path'); const dir = path.resolve('blueprints'); if (!fs.existsSync(dir)) return; for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { if (!entry.isDirectory()) continue; const bp = path.join(dir, entry.name, 'blueprint.json'); if (fs.existsSync(bp)) execFileSync(process.execPath, ['packages/wpai-cli/dist/cli.js', 'validate', bp], { stdio: 'inherit' }); } })\"",
     "test:integration": "npm run test:integration --workspaces",
     "wpai": "node packages/wpai-cli/dist/cli.js"
   }

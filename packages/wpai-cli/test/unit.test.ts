@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,21 +25,16 @@ function runCli(
   args: string[],
   options: { cwd?: string } = {}
 ): { code: number; stdout: string; stderr: string } {
-  try {
-    const stdout = execFileSync(process.execPath, [cliEntry, ...args], {
-      cwd: options.cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    return { code: 0, stdout, stderr: '' };
-  } catch (err) {
-    const e = err as { status?: number; stdout?: string; stderr?: string };
-    return {
-      code: e.status ?? 1,
-      stdout: e.stdout ?? '',
-      stderr: e.stderr ?? '',
-    };
-  }
+  const res = spawnSync(process.execPath, [cliEntry, ...args], {
+    cwd: options.cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return {
+    code: res.status ?? 1,
+    stdout: res.stdout ?? '',
+    stderr: res.stderr ?? '',
+  };
 }
 
 describe('wpai validate-registry', () => {
@@ -558,8 +553,38 @@ describe('wpai export (production handoff bridge)', () => {
   });
 });
 
+describe('wpai bundled asset resolution precedence', () => {
+  it('prefers bundled package assets over untrusted files in process.cwd() unless an explicit path is passed', () => {
+    const spoofDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-spoof-cwd-'));
+    try {
+      fs.mkdirSync(path.join(spoofDir, 'registry'), { recursive: true });
+      fs.writeFileSync(
+        path.join(spoofDir, 'registry', 'wp-capabilities.json'),
+        '{ not valid json',
+        'utf8'
+      );
+
+      // Default resolution ignores poisoned cwd file and uses bundled package asset
+      const res = runCli(['check-fit', 'website for my bakery', '--json'], { cwd: spoofDir });
+      assert.equal(res.code, 0, res.stderr);
+      const parsed = JSON.parse(res.stdout) as { decision: string; wordpress_fit: boolean };
+      assert.equal(parsed.decision, 'recommended');
+      assert.equal(parsed.wordpress_fit, true);
+
+      // Explicit --registry still takes highest precedence
+      const explicitRes = runCli(
+        ['check-fit', 'website for my bakery', '--registry', path.join(spoofDir, 'registry', 'wp-capabilities.json'), '--json'],
+        { cwd: spoofDir }
+      );
+      assert.equal(explicitRes.code, 1);
+    } finally {
+      fs.rmSync(spoofDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('wpai mcp (MCP JSON-RPC 2.0 server)', () => {
-  it('handles initialize, tools/list, tools/call (check_fit & catalog), and resources/read', async () => {
+  it('handles initialize, tools/list, tools/call (check_fit & catalog), and both resources/read URIs', async () => {
     const initResp = await handleMcpRequest({
       jsonrpc: '2.0',
       id: 1,
@@ -612,6 +637,17 @@ describe('wpai mcp (MCP JSON-RPC 2.0 server)', () => {
     const contents = (resRead.result as { contents: Array<{ mimeType: string; text: string }> }).contents;
     assert.equal(contents[0]?.mimeType, 'application/json');
     assert.ok(JSON.parse(contents[0]!.text).registry_version);
+
+    const skillRead = await handleMcpRequest({
+      jsonrpc: '2.0',
+      id: 6,
+      method: 'resources/read',
+      params: { uri: 'wpai://skill/platform-selection' },
+    });
+    assert.ok(skillRead && !skillRead.error);
+    const skillContents = (skillRead.result as { contents: Array<{ mimeType: string; text: string }> }).contents;
+    assert.equal(skillContents[0]?.mimeType, 'text/markdown');
+    assert.ok(skillContents[0]!.text.includes('wp-platform-selection'));
   });
 });
 
