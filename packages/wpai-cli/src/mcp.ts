@@ -1,8 +1,7 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import readline from 'node:readline';
 import { exportForProduction } from './export.js';
-import { findRepoRoot } from './paths.js';
+import { findPlatformSelectionSkillPath, getPackageVersion } from './paths.js';
 import { verifyBlueprint } from './playground.js';
 import { initProject, isValidPreset } from './presets.js';
 import { evaluateFit, loadRegistry } from './registry.js';
@@ -10,7 +9,7 @@ import { PRESET_NAMES } from './types.js';
 import { validateBlueprintFile } from './validator.js';
 
 const SERVER_NAME = 'wpai';
-const SERVER_VERSION = '0.2.0';
+const SERVER_VERSION = getPackageVersion();
 const SUPPORTED_PROTOCOL_VERSION = '2024-11-05';
 
 interface JsonRpcRequest {
@@ -279,14 +278,7 @@ function handleResourceRead(uri: string): { contents: Array<{ uri: string; mimeT
     };
   }
   if (uri === 'wpai://skill/platform-selection') {
-    const repoRoot = findRepoRoot();
-    if (!repoRoot) {
-      throw new Error('Repository root not found for wpai://skill/platform-selection');
-    }
-    const skillPath = path.join(repoRoot, 'skills', 'wp-platform-selection', 'SKILL.md');
-    if (!fs.existsSync(skillPath)) {
-      throw new Error(`Skill file not found: ${skillPath}`);
-    }
+    const skillPath = findPlatformSelectionSkillPath();
     return {
       contents: [
         {

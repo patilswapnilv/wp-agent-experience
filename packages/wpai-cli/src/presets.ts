@@ -341,15 +341,17 @@ foreach ( $pages as $slug => $spec ) {
 }
 
 $products = array(
-    array( 'title' => 'Starter Item Alpha', 'sku' => 'SKU-001', 'price' => '24.00', 'stock' => '45', 'weight' => '0.4' ),
-    array( 'title' => 'Starter Item Beta',  'sku' => 'SKU-002', 'price' => '48.00', 'stock' => '18', 'weight' => '1.2' ),
-    array( 'title' => 'Starter Item Gamma', 'sku' => 'SKU-003', 'price' => '75.00', 'stock' => '10', 'weight' => '2.5' ),
+    array( 'slug' => 'starter-item-alpha', 'title' => 'Starter Item Alpha', 'sku' => 'SKU-001', 'price' => '24.00', 'stock' => '45', 'weight' => '0.4' ),
+    array( 'slug' => 'starter-item-beta',  'title' => 'Starter Item Beta',  'sku' => 'SKU-002', 'price' => '48.00', 'stock' => '18', 'weight' => '1.2' ),
+    array( 'slug' => 'starter-item-gamma', 'title' => 'Starter Item Gamma', 'sku' => 'SKU-003', 'price' => '75.00', 'stock' => '10', 'weight' => '2.5' ),
 );
 
 foreach ( $products as $item ) {
-    $pid = wp_insert_post( array(
+    $existing_prod = get_page_by_path( $item['slug'], OBJECT, 'wpai_product' );
+    $pid = $existing_prod ? $existing_prod->ID : wp_insert_post( array(
         'post_type'    => 'wpai_product',
         'post_status'  => 'publish',
+        'post_name'    => $item['slug'],
         'post_title'   => $item['title'],
         'post_content' => '<!-- wp:paragraph --><p>Editable product description with SKU, stock tracking, and shipping weight.</p><!-- /wp:paragraph -->',
     ) );
@@ -511,18 +513,21 @@ foreach ( $pages as $slug => $spec ) {
 
 $articles = array(
     array(
+        'slug'   => 'town-council-approves-new-community-trail',
         'title'  => 'Town Council Approves New Community Trail',
         'cat'    => 'local-news',
         'author' => $author_ids['maya_editor'] ?? 1,
         'body'   => '<!-- wp:paragraph --><p>Local residents gathered Tuesday evening to celebrate approval of the three-mile walking and cycling loop.</p><!-- /wp:paragraph -->',
     ),
     array(
+        'slug'   => 'weekend-farmers-market-guide',
         'title'  => 'Weekend Farmers Market Guide',
         'cat'    => 'guides',
         'author' => $author_ids['sam_reporter'] ?? 1,
         'body'   => '<!-- wp:paragraph --><p>Seasonal produce schedules, parking tips, and bakeries opening early every Saturday morning.</p><!-- /wp:paragraph -->',
     ),
     array(
+        'slug'   => 'why-independent-local-reporting-matters',
         'title'  => 'Why Independent Local Reporting Matters',
         'cat'    => 'opinion',
         'author' => $author_ids['maya_editor'] ?? 1,
@@ -531,9 +536,13 @@ $articles = array(
 );
 
 foreach ( $articles as $art ) {
+    if ( get_page_by_path( $art['slug'], OBJECT, 'post' ) ) {
+        continue;
+    }
     wp_insert_post( array(
         'post_type'     => 'post',
         'post_status'   => 'publish',
+        'post_name'     => $art['slug'],
         'post_title'    => $art['title'],
         'post_content'  => $art['body'],
         'post_author'   => $art['author'],
@@ -742,13 +751,15 @@ if ( $home_id > 0 ) {
 }
 
 $events = array(
-    array( 'title' => 'Community Park Cleanup', 'date' => '2026-12-06' ),
-    array( 'title' => 'Annual Winter Fundraiser', 'date' => '2026-12-18' ),
+    array( 'slug' => 'community-park-cleanup', 'title' => 'Community Park Cleanup', 'date' => '2026-12-06' ),
+    array( 'slug' => 'annual-winter-fundraiser', 'title' => 'Annual Winter Fundraiser', 'date' => '2026-12-18' ),
 );
 foreach ( $events as $ev ) {
-    $id = wp_insert_post( array(
+    $existing_ev = get_page_by_path( $ev['slug'], OBJECT, 'wpai_event' );
+    $id = $existing_ev ? $existing_ev->ID : wp_insert_post( array(
         'post_type'    => 'wpai_event',
         'post_status'  => 'publish',
+        'post_name'    => $ev['slug'],
         'post_title'   => $ev['title'],
         'post_content' => '<!-- wp:paragraph --><p>Join our volunteers for ' . esc_html( $ev['title'] ) . '.</p><!-- /wp:paragraph -->',
     ) );
@@ -905,21 +916,26 @@ if ( $home_id > 0 ) {
     update_option( 'page_on_front', $home_id );
 }
 
-$cid = wp_insert_post( array(
+$existing_course = get_page_by_path( 'foundations-video-workshop', OBJECT, 'wpai_course' );
+$cid = $existing_course ? $existing_course->ID : wp_insert_post( array(
     'post_type'    => 'wpai_course',
     'post_status'  => 'publish',
+    'post_name'    => 'foundations-video-workshop',
     'post_title'   => 'Foundations Video Workshop',
     'post_content' => '<!-- wp:paragraph --><p>Step-by-step recorded video lessons with downloadable notes.</p><!-- /wp:paragraph -->',
 ) );
 if ( $cid && ! is_wp_error( $cid ) ) {
     update_post_meta( $cid, '_wpai_course_price', '79.00' );
 }
-wp_insert_post( array(
-    'post_type'    => 'wpai_lesson',
-    'post_status'  => 'publish',
-    'post_title'   => 'Lesson 1: Free Preview & Setup',
-    'post_content' => '<!-- wp:paragraph --><p>Embed Vimeo, Bunny Stream, or Mux video blocks directly in the Block Editor.</p><!-- /wp:paragraph -->',
-) );
+if ( ! get_page_by_path( 'lesson-1-free-preview-setup', OBJECT, 'wpai_lesson' ) ) {
+    wp_insert_post( array(
+        'post_type'    => 'wpai_lesson',
+        'post_status'  => 'publish',
+        'post_name'    => 'lesson-1-free-preview-setup',
+        'post_title'   => 'Lesson 1: Free Preview & Setup',
+        'post_content' => '<!-- wp:paragraph --><p>Embed Vimeo, Bunny Stream, or Mux video blocks directly in the Block Editor.</p><!-- /wp:paragraph -->',
+    ) );
+}
 flush_rewrite_rules();
 `;
 

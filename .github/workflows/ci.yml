@@ -42,6 +42,9 @@ jobs:
       - name: Run Node unit tests
         run: npm test
 
+      - name: Smoke-test packed npm tarball outside repository
+        run: npm run test:pack
+
       - name: Run Python benchmark harness tests
         run: python3 -m unittest discover -s benchmarks/harness -p 'test_*.py' -v
 
