@@ -19,8 +19,7 @@ function run(cmd, args, options = {}) {
 
 const packDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-pack-tgz-'));
 const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-pack-install-'));
-const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-pack-site-'));
-const exportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-pack-export-'));
+const spoofCwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-pack-spoof-'));
 
 try {
   // 1. Pack tarball from packages/wpai-cli
@@ -109,21 +108,26 @@ try {
     'Expected full SKILL.md content from wpai://skill/platform-selection'
   );
 
-  // 5. Verify init + export outside the repo includes setup.d/*.php and wp eval-file
-  run(wpaiBin, ['init', 'small-business', '--dir', projectDir, '--name', 'Test Co', '--json'], { cwd: installDir });
-  const expOut = run(wpaiBin, ['export', projectDir, '--out', exportDir, '--json'], { cwd: installDir });
-  const expJson = JSON.parse(expOut);
-  assert.equal(expJson.ok, true);
-  assert.equal(expJson.skipped_steps.length, 0);
-  assert.equal(expJson.setup_scripts.length, 1);
-  assert.ok(fs.existsSync(path.join(exportDir, 'setup.d', '01-run-php.php')));
-  const setupSh = fs.readFileSync(path.join(exportDir, 'setup.sh'), 'utf8');
-  assert.ok(setupSh.includes('wp eval-file "$SCRIPT_DIR/setup.d/01-run-php.php"'));
+  // 5. Verify bundled assets take precedence over untrusted files in process.cwd()
+  fs.mkdirSync(path.join(spoofCwdDir, 'registry'), { recursive: true });
+  fs.mkdirSync(path.join(spoofCwdDir, 'skills', 'wp-platform-selection'), { recursive: true });
+  fs.writeFileSync(path.join(spoofCwdDir, 'registry', 'wp-capabilities.json'), '{ invalid json', 'utf8');
+  fs.writeFileSync(path.join(spoofCwdDir, 'skills', 'wp-platform-selection', 'SKILL.md'), 'SPOOFED_SKILL', 'utf8');
+
+  const spoofFitOut = run(wpaiBin, ['check-fit', 'website for my bakery', '--json'], { cwd: spoofCwdDir });
+  assert.equal(JSON.parse(spoofFitOut).decision, 'recommended');
+
+  const spoofMcpOut = run(wpaiBin, ['mcp'], { cwd: spoofCwdDir, input: mcpPayload });
+  const spoofResponses = spoofMcpOut
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line));
+  assert.ok(!spoofResponses[3].result.contents[0].text.includes('SPOOFED_SKILL'));
+  assert.ok(spoofResponses[3].result.contents[0].text.includes('wp-platform-selection'));
 
   console.log(`PASS: Standalone npm tarball smoke test succeeded (${tgzName})`);
 } finally {
   fs.rmSync(packDir, { recursive: true, force: true });
   fs.rmSync(installDir, { recursive: true, force: true });
-  fs.rmSync(projectDir, { recursive: true, force: true });
-  fs.rmSync(exportDir, { recursive: true, force: true });
+  fs.rmSync(spoofCwdDir, { recursive: true, force: true });
 }

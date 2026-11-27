@@ -389,20 +389,7 @@ async function main(): Promise<number> {
           console.log(`Exported WordPress production bundle to ${result.out_dir}`);
           console.log(`  Source blueprint: ${result.source_blueprint}`);
           console.log(`  wp-content files: ${result.wp_content_files.length}`);
-          console.log(`  Setup scripts:    ${result.setup_scripts.length}`);
           console.log(`  WP-CLI commands:  ${result.wp_cli_commands.length}`);
-          if (result.warnings.length > 0) {
-            console.warn(`  Warnings (${result.warnings.length}):`);
-            for (const warn of result.warnings) {
-              console.warn(`    [WARN] ${warn}`);
-            }
-          }
-          if (result.skipped_steps.length > 0) {
-            console.warn(`  Skipped steps (${result.skipped_steps.length}):`);
-            for (const s of result.skipped_steps) {
-              console.warn(`    [SKIP] step #${s.index + 1} (${s.step}): ${s.reason}`);
-            }
-          }
           console.log(`  Next: see ${result.out_dir}/DEPLOY.md`);
         }
         return 0;

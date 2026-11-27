@@ -103,9 +103,6 @@ export function findRegistryPath(explicitPath?: string): string {
     return resolved;
   }
 
-  const fromCwd = walkUpFor(process.cwd(), 'registry/wp-capabilities.json');
-  if (fromCwd) return fromCwd;
-
   const fromBundled = findBundledAsset('registry/wp-capabilities.json');
   if (fromBundled) return fromBundled;
 
@@ -126,9 +123,6 @@ export function findRegistrySchemaPath(explicitPath?: string): string {
     return resolved;
   }
 
-  const fromCwd = walkUpFor(process.cwd(), 'registry/schema/wp-capabilities.schema.json');
-  if (fromCwd) return fromCwd;
-
   const fromBundled = findBundledAsset('registry/schema/wp-capabilities.schema.json');
   if (fromBundled) return fromBundled;
 
@@ -148,9 +142,6 @@ export function findPlatformSelectionSkillPath(explicitPath?: string): string {
     }
     return resolved;
   }
-
-  const fromCwd = walkUpFor(process.cwd(), 'skills/wp-platform-selection/SKILL.md');
-  if (fromCwd) return fromCwd;
 
   const fromBundled = findBundledAsset('skills/wp-platform-selection/SKILL.md');
   if (fromBundled) return fromBundled;

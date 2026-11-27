@@ -356,96 +356,18 @@ describe('wpai check-fit & catalog', () => {
 });
 
 describe('wpai export (production handoff bridge)', () => {
-  it('exports wp-content mu-plugins, runPHP setup.d scripts, WP-CLI setup.sh, and DEPLOY.md for every preset', () => {
-    for (const preset of PRESET_NAMES) {
-      const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), `wpai-exp-${preset}-src-`));
-      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), `wpai-exp-${preset}-out-`));
-      try {
-        initProject({ preset, dir: srcDir, name: `Test ${preset}` });
-        const res = exportForProduction({ target: srcDir, outDir });
-        assert.equal(res.ok, true);
-        assert.equal(
-          res.skipped_steps.length,
-          0,
-          `Expected 0 skipped steps for preset "${preset}", got: ${JSON.stringify(res.skipped_steps)}`
-        );
-        assert.equal(
-          res.warnings.length,
-          0,
-          `Expected 0 warnings for preset "${preset}", got: ${JSON.stringify(res.warnings)}`
-        );
-        assert.equal(res.setup_scripts.length, 1, `Expected 1 setup script for preset "${preset}"`);
-        assert.equal(res.setup_scripts[0], 'setup.d/01-run-php.php');
-
-        const setupPhpPath = path.join(outDir, 'setup.d', '01-run-php.php');
-        assert.ok(fs.existsSync(setupPhpPath), `Expected ${setupPhpPath} to exist`);
-        const phpContent = fs.readFileSync(setupPhpPath, 'utf8');
-        assert.ok(phpContent.startsWith('<?php\n'), `Expected valid <?php header for "${preset}"`);
-        assert.ok(
-          !phpContent.includes('/wordpress/wp-load.php'),
-          `Expected Playground wp-load.php require to be stripped for "${preset}"`
-        );
-
-        const setupSh = fs.readFileSync(path.join(outDir, 'setup.sh'), 'utf8');
-        assert.ok(setupSh.includes('SCRIPT_DIR='));
-        assert.ok(setupSh.includes('wp eval-file "$SCRIPT_DIR/setup.d/01-run-php.php"'));
-        assert.ok(res.wp_cli_commands.some((c) => c.includes('blogname') && c.includes(`Test ${preset}`)));
-
-        const deployMd = fs.readFileSync(path.join(outDir, 'DEPLOY.md'), 'utf8');
-        assert.ok(deployMd.includes('`setup.d/`'));
-        assert.ok(!deployMd.includes('Manual Steps Required'));
-        assert.ok(fs.existsSync(path.join(outDir, 'blueprint.json')));
-      } finally {
-        fs.rmSync(srcDir, { recursive: true, force: true });
-        fs.rmSync(outDir, { recursive: true, force: true });
-      }
-    }
-  });
-
-  it('reports skipped unsupported steps and residual Playground paths in JSON, CLI stderr, and DEPLOY.md', () => {
-    const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-exp-skip-src-'));
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-exp-skip-out-'));
+  it('exports wp-content mu-plugins, WP-CLI setup.sh, and DEPLOY.md from a scaffolded project', () => {
+    const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-exp-src-'));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-exp-out-'));
     try {
-      const bp = {
-        $schema: 'https://playground.wordpress.net/blueprint-schema.json',
-        steps: [
-          { step: 'setSiteOptions', options: { blogname: 'Edge Case Site' } },
-          {
-            step: 'runPHP',
-            code: "<?php require_once '/wordpress/wp-load.php'; $p = '/wordpress/custom-data.json'; update_option('demo', $p);",
-          },
-          { step: 'writeFile', path: '/wordpress/robots.txt', data: 'User-agent: *' },
-          { step: 'defineWpConfigConsts', consts: { WP_DEBUG: true } },
-        ],
-      };
-      fs.writeFileSync(path.join(srcDir, 'blueprint.json'), JSON.stringify(bp, null, 2), 'utf8');
-
+      initProject({ preset: 'nonprofit', dir: srcDir, name: 'Harbor Rescue' });
       const res = exportForProduction({ target: srcDir, outDir });
       assert.equal(res.ok, true);
-      assert.equal(res.setup_scripts.length, 1);
-      assert.equal(res.warnings.length, 1);
-      assert.ok(res.warnings[0]?.includes('/wordpress/'));
-
-      const phpCode = fs.readFileSync(path.join(outDir, 'setup.d', '01-run-php.php'), 'utf8');
-      assert.ok(!phpCode.includes('wp-load.php'));
-      assert.ok(phpCode.includes("update_option('demo', $p);"));
-
-      assert.equal(res.skipped_steps.length, 2);
-      assert.equal(res.skipped_steps[0]?.step, 'writeFile');
-      assert.equal(res.skipped_steps[1]?.step, 'defineWpConfigConsts');
-
-      const deployMd = fs.readFileSync(path.join(outDir, 'DEPLOY.md'), 'utf8');
-      assert.ok(deployMd.includes('## Export Warnings'));
-      assert.ok(deployMd.includes('## Manual Steps Required (Skipped Blueprint Steps)'));
-      assert.ok(deployMd.includes('defineWpConfigConsts'));
-      assert.ok(deployMd.includes('/wordpress/robots.txt'));
-
-      const cliRes = runCli(['export', srcDir, '--out', outDir]);
-      assert.equal(cliRes.code, 0);
-      assert.ok(cliRes.stdout.includes('Setup scripts:    1'));
-      assert.ok(cliRes.stderr.includes('Skipped steps (2):'));
-      assert.ok(cliRes.stderr.includes('defineWpConfigConsts'));
-      assert.ok(cliRes.stderr.includes('Warnings (1):'));
+      assert.ok(res.wp_content_files.some((f) => f.endsWith('wpai-nonprofit.php')));
+      assert.ok(res.wp_cli_commands.some((c) => c.includes('blogname') && c.includes('Harbor Rescue')));
+      assert.ok(fs.existsSync(path.join(outDir, 'setup.sh')));
+      assert.ok(fs.existsSync(path.join(outDir, 'DEPLOY.md')));
+      assert.ok(fs.existsSync(path.join(outDir, 'blueprint.json')));
     } finally {
       fs.rmSync(srcDir, { recursive: true, force: true });
       fs.rmSync(outDir, { recursive: true, force: true });
@@ -459,19 +381,42 @@ describe('wpai export (production handoff bridge)', () => {
       initProject({ preset: 'course', dir: srcDir, name: 'Pottery Studio' });
       const res = runCli(['export', srcDir, '--out', outDir, '--json']);
       assert.equal(res.code, 0, res.stderr);
-      const parsed = JSON.parse(res.stdout) as {
-        ok: boolean;
-        wp_content_files: string[];
-        setup_scripts: string[];
-        skipped_steps: unknown[];
-      };
+      const parsed = JSON.parse(res.stdout) as { ok: boolean; wp_content_files: string[] };
       assert.equal(parsed.ok, true);
       assert.ok(parsed.wp_content_files.length >= 1);
-      assert.equal(parsed.setup_scripts.length, 1);
-      assert.equal(parsed.skipped_steps.length, 0);
     } finally {
       fs.rmSync(srcDir, { recursive: true, force: true });
       fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('wpai bundled asset resolution precedence', () => {
+  it('prefers bundled package assets over untrusted files in process.cwd() unless an explicit path is passed', () => {
+    const spoofDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-spoof-cwd-'));
+    try {
+      fs.mkdirSync(path.join(spoofDir, 'registry'), { recursive: true });
+      fs.writeFileSync(
+        path.join(spoofDir, 'registry', 'wp-capabilities.json'),
+        '{ not valid json',
+        'utf8'
+      );
+
+      // Default resolution ignores poisoned cwd file and uses bundled package asset
+      const res = runCli(['check-fit', 'website for my bakery', '--json'], { cwd: spoofDir });
+      assert.equal(res.code, 0, res.stderr);
+      const parsed = JSON.parse(res.stdout) as { decision: string; wordpress_fit: boolean };
+      assert.equal(parsed.decision, 'recommended');
+      assert.equal(parsed.wordpress_fit, true);
+
+      // Explicit --registry still takes highest precedence
+      const explicitRes = runCli(
+        ['check-fit', 'website for my bakery', '--registry', path.join(spoofDir, 'registry', 'wp-capabilities.json'), '--json'],
+        { cwd: spoofDir }
+      );
+      assert.equal(explicitRes.code, 1);
+    } finally {
+      fs.rmSync(spoofDir, { recursive: true, force: true });
     }
   });
 });

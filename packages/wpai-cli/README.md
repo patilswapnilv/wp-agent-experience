@@ -26,7 +26,7 @@ npx wpai-cli validate ./my-bakery/blueprint.json --json
 # 4. Boot and functionally verify live inside WordPress Playground (WP 7.x + PHP 8.3 + Abilities API)
 npx wpai-cli verify ./my-bakery --json
 
-# 5. Export a production-ready handoff bundle (wp-content/ + setup.d/ + WP-CLI setup.sh + DEPLOY.md)
+# 5. Export a production-ready handoff bundle (wp-content/ + WP-CLI setup.sh + DEPLOY.md)
 npx wpai-cli export ./my-bakery --out ./dist-wp
 ```
 
@@ -58,7 +58,7 @@ Add `wpai-cli` to Claude Code, Cursor, Codex, Antigravity, or any MCP-compatible
 - `wpai_init` — Scaffolds any of the 6 verified WordPress Playground presets
 - `wpai_validate` — Strict Blueprint v1 JSON validator
 - `wpai_verify` — Live WordPress Playground boot & functional verification (auto-mounts sibling `wp-content/themes/*`, `plugins/*`, and `mu-plugins/`)
-- `wpai_export` — Extracts `wp-content/`, `setup.d/*.php`, WP-CLI `setup.sh`, and `DEPLOY.md` for production MySQL/managed hosting
+- `wpai_export` — Extracts `wp-content/`, WP-CLI `setup.sh`, and `DEPLOY.md` for production MySQL/managed hosting
 
 ### Exposed MCP Resources
 - `wpai://registry/capabilities` — Machine-readable WordPress capability registry (JSON)
