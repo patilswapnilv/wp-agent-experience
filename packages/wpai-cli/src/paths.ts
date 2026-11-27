@@ -83,10 +83,6 @@ export function findBundledAsset(relativeTarget: string): string | null {
  * Locate the WPAI repository root containing registry/wp-capabilities.json.
  */
 export function findRepoRoot(): string | null {
-  const fromCwd = walkUpFor(process.cwd(), 'registry/wp-capabilities.json');
-  if (fromCwd) {
-    return path.dirname(path.dirname(fromCwd));
-  }
   const fromPkg = walkUpFor(__dirname, 'registry/wp-capabilities.json');
   if (fromPkg) {
     return path.dirname(path.dirname(fromPkg));
@@ -156,9 +152,6 @@ export function findPlatformSelectionSkillPath(explicitPath?: string): string {
 
 export function findBlueprintPresetDir(preset: PresetName): string | null {
   const rel = path.join('blueprints', preset);
-  const fromCwd = walkUpFor(process.cwd(), path.join(rel, 'blueprint.json'));
-  if (fromCwd) return path.dirname(fromCwd);
-
   const fromPkg = walkUpFor(__dirname, path.join(rel, 'blueprint.json'));
   if (fromPkg) return path.dirname(fromPkg);
 
@@ -176,7 +169,7 @@ export interface PlaygroundInvocation {
  */
 export function findPlaygroundCli(): PlaygroundInvocation {
   const binNames = ['wp-playground-cli', 'wp-playground'];
-  const searchRoots = [__dirname, process.cwd()];
+  const searchRoots = [__dirname];
 
   for (const root of searchRoots) {
     for (const binName of binNames) {

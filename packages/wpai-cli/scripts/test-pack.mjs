@@ -17,21 +17,34 @@ function run(cmd, args, options = {}) {
   });
 }
 
+function runNpm(args, options = {}) {
+  if (process.env.npm_execpath && fs.existsSync(process.env.npm_execpath)) {
+    return run(process.execPath, [process.env.npm_execpath, ...args], options);
+  }
+  if (process.platform === 'win32') {
+    const bundledNpmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    if (fs.existsSync(bundledNpmCli)) {
+      return run(process.execPath, [bundledNpmCli, ...args], options);
+    }
+  }
+  return run('npm', args, options);
+}
+
 const packDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-pack-tgz-'));
 const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-pack-install-'));
 const spoofCwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-pack-spoof-'));
 
 try {
   // 1. Pack tarball from packages/wpai-cli
-  const packOut = run('npm', ['pack', '--pack-destination', packDir], { cwd: pkgRoot }).trim();
+  const packOut = runNpm(['pack', '--pack-destination', packDir], { cwd: pkgRoot }).trim();
   const tgzName = packOut.split(/\r?\n/).pop();
   assert.ok(tgzName && tgzName.endsWith('.tgz'), `Expected .tgz filename from npm pack, got: ${packOut}`);
   const tgzPath = path.join(packDir, tgzName);
   assert.ok(fs.existsSync(tgzPath), `Tarball not found at ${tgzPath}`);
 
   // 2. Install tarball into a completely empty directory outside the repository
-  run('npm', ['init', '-y'], { cwd: installDir });
-  run('npm', ['install', '--no-audit', '--no-fund', tgzPath], { cwd: installDir });
+  runNpm(['init', '-y'], { cwd: installDir });
+  runNpm(['install', '--no-audit', '--no-fund', tgzPath], { cwd: installDir });
 
   const wpaiBin = path.join(
     installDir,
@@ -41,18 +54,28 @@ try {
   );
   assert.ok(fs.existsSync(wpaiBin), `Expected installed wpai bin at ${wpaiBin}`);
 
+  const wpaiEntry = path.join(installDir, 'node_modules', 'wpai-cli', 'dist', 'cli.js');
+  assert.ok(fs.existsSync(wpaiEntry), `Expected installed wpai CLI entry at ${wpaiEntry}`);
+
+  function runWpai(args, options = {}) {
+    if (process.platform === 'win32') {
+      return run(process.execPath, [wpaiEntry, ...args], options);
+    }
+    return run(wpaiBin, args, options);
+  }
+
   // 3. Verify CLI check-fit, catalog, validate-registry outside the repo
-  const fitOut = run(wpaiBin, ['check-fit', 'website for my bakery', '--json'], { cwd: installDir });
+  const fitOut = runWpai(['check-fit', 'website for my bakery', '--json'], { cwd: installDir });
   const fitJson = JSON.parse(fitOut);
   assert.equal(fitJson.decision, 'recommended');
   assert.equal(fitJson.wordpress_fit, true);
   assert.equal(fitJson.blueprint_preset, 'small-business');
 
-  const catOut = run(wpaiBin, ['catalog', '--json'], { cwd: installDir });
+  const catOut = runWpai(['catalog', '--json'], { cwd: installDir });
   const catJson = JSON.parse(catOut);
   assert.ok(catJson.registry_version, 'Expected registry_version from wpai catalog');
 
-  const valRegOut = run(wpaiBin, ['validate-registry', '--json'], { cwd: installDir });
+  const valRegOut = runWpai(['validate-registry', '--json'], { cwd: installDir });
   const valRegJson = JSON.parse(valRegOut);
   assert.equal(valRegJson.valid, true, JSON.stringify(valRegJson.errors));
 
@@ -84,7 +107,7 @@ try {
     }),
   ].join('\n') + '\n';
 
-  const mcpOut = run(wpaiBin, ['mcp'], { cwd: installDir, input: mcpPayload });
+  const mcpOut = runWpai(['mcp'], { cwd: installDir, input: mcpPayload });
   const responses = mcpOut
     .trim()
     .split(/\r?\n/)
@@ -108,22 +131,39 @@ try {
     'Expected full SKILL.md content from wpai://skill/platform-selection'
   );
 
-  // 5. Verify bundled assets take precedence over untrusted files in process.cwd()
+  // 5. Verify bundled/built-in assets take precedence over untrusted files in process.cwd()
   fs.mkdirSync(path.join(spoofCwdDir, 'registry'), { recursive: true });
   fs.mkdirSync(path.join(spoofCwdDir, 'skills', 'wp-platform-selection'), { recursive: true });
+  fs.mkdirSync(path.join(spoofCwdDir, 'blueprints', 'small-business'), { recursive: true });
   fs.writeFileSync(path.join(spoofCwdDir, 'registry', 'wp-capabilities.json'), '{ invalid json', 'utf8');
   fs.writeFileSync(path.join(spoofCwdDir, 'skills', 'wp-platform-selection', 'SKILL.md'), 'SPOOFED_SKILL', 'utf8');
+  fs.writeFileSync(
+    path.join(spoofCwdDir, 'blueprints', 'small-business', 'blueprint.json'),
+    JSON.stringify({ landingPage: '/spoofed' }),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(spoofCwdDir, 'blueprints', 'small-business', 'spoofed-payload.txt'),
+    'DO_NOT_COPY',
+    'utf8'
+  );
 
-  const spoofFitOut = run(wpaiBin, ['check-fit', 'website for my bakery', '--json'], { cwd: spoofCwdDir });
+  const spoofFitOut = runWpai(['check-fit', 'website for my bakery', '--json'], { cwd: spoofCwdDir });
   assert.equal(JSON.parse(spoofFitOut).decision, 'recommended');
 
-  const spoofMcpOut = run(wpaiBin, ['mcp'], { cwd: spoofCwdDir, input: mcpPayload });
+  const spoofMcpOut = runWpai(['mcp'], { cwd: spoofCwdDir, input: mcpPayload });
   const spoofResponses = spoofMcpOut
     .trim()
     .split(/\r?\n/)
     .map((line) => JSON.parse(line));
   assert.ok(!spoofResponses[3].result.contents[0].text.includes('SPOOFED_SKILL'));
   assert.ok(spoofResponses[3].result.contents[0].text.includes('wp-platform-selection'));
+
+  const initOutDir = path.join(spoofCwdDir, 'out-site');
+  const spoofInitOut = runWpai(['init', 'small-business', '--dir', initOutDir, '--json'], { cwd: spoofCwdDir });
+  const spoofInitJson = JSON.parse(spoofInitOut);
+  assert.equal(spoofInitJson.source, 'built-in');
+  assert.ok(!fs.existsSync(path.join(initOutDir, 'spoofed-payload.txt')));
 
   console.log(`PASS: Standalone npm tarball smoke test succeeded (${tgzName})`);
 } finally {
