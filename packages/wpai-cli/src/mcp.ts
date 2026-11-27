@@ -125,7 +125,7 @@ const MCP_TOOLS = [
   {
     name: 'wpai_export',
     description:
-      'Export a WordPress Playground project into a production-ready deployable bundle (wp-content/, WP-CLI setup.sh, and DEPLOY.md checklist).',
+      'Export a WordPress Playground project into a deployable bundle (wp-content/, WP-CLI setup.sh, and DEPLOY.md checklist). Fails with ok: false and writes nothing when Blueprint steps cannot be translated, unless allow_partial is true; skipped_steps lists them.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -136,6 +136,11 @@ const MCP_TOOLS = [
         out_dir: {
           type: 'string',
           description: 'Output directory for the production export bundle.',
+        },
+        allow_partial: {
+          type: 'boolean',
+          description:
+            'Write the bundle even when some Blueprint steps (e.g. runPHP) cannot be translated. The result is marked complete: false and DEPLOY.md lists the manual steps. Defaults to false, which fails without writing files.',
         },
       },
       required: ['target', 'out_dir'],
@@ -244,7 +249,14 @@ async function handleToolCall(
         if (!target || !outDir) {
           throw new Error('Missing required string arguments "target" and "out_dir".');
         }
-        payload = exportForProduction({ target, outDir });
+        const exportResult = exportForProduction({ target, outDir, allowPartial: args.allow_partial === true });
+        if (!exportResult.ok) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify(exportResult, null, 2) }],
+            isError: true,
+          };
+        }
+        payload = exportResult;
         break;
       }
 

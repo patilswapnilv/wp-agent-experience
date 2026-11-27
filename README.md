@@ -23,8 +23,10 @@ npx wpai-cli init small-business --dir ./my-bakery --name "Sunrise Bakery"
 # Validate and live-verify inside WordPress Playground (WASM PHP 8.3 + SQLite)
 npx wpai-cli verify ./my-bakery --json
 
-# Export a production-ready bundle (wp-content/ + WP-CLI setup.sh + DEPLOY.md)
-npx wpai-cli export ./my-bakery --out ./dist-wp
+# Export a deployable bundle (wp-content/ + WP-CLI setup.sh + DEPLOY.md).
+# Fails by default if any Blueprint step (e.g. runPHP page seeding) can't be translated;
+# --allow-partial writes the bundle anyway and lists the manual steps in DEPLOY.md.
+npx wpai-cli export ./my-bakery --out ./dist-wp --allow-partial
 ```
 
 Or install globally to use the `wpai` command directly:

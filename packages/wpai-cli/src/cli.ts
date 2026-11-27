@@ -16,6 +16,7 @@ interface ParsedArgs {
 
 const BOOLEAN_FLAGS = new Set([
   'json',
+  'allow-partial',
   'headless',
   'help',
   'h',
@@ -88,7 +89,7 @@ Usage:
   wpai validate <blueprint-path> [--json]
   wpai boot <dir-or-blueprint> [--headless] [--port <port>] [--wp <ver>] [--php <ver>] [--json]
   wpai verify <dir-or-blueprint> [--checks <verify.json>] [--timeout <ms>] [--wp <ver>] [--php <ver>] [--json]
-  wpai export <dir-or-blueprint> [--out <dir>] [--json]
+  wpai export <dir-or-blueprint> [--out <dir>] [--allow-partial] [--json]
   wpai mcp
   wpai catalog [--registry <path>] [--json]
   wpai check-fit "<prompt>" [--registry <path>] [--json]
@@ -380,18 +381,34 @@ async function main(): Promise<number> {
       case 'export': {
         const target = positionals[0] ?? '.';
         const outDir = getStringFlag(flags, 'out') ?? './dist-wp';
-        const result = exportForProduction({ target, outDir });
+        const allowPartial = getBoolFlag(flags, 'allow-partial');
+        const result = exportForProduction({ target, outDir, allowPartial });
+        const blocking = result.skipped_steps.filter((s) => s.blocking);
 
         if (asJson) {
           console.log(JSON.stringify(result, null, 2));
+        } else if (!result.ok) {
+          console.error(`Export failed: ${blocking.length} Blueprint operation(s) cannot be translated to production.`);
+          for (const s of blocking) {
+            console.error(`  [SKIPPED] ${s.location} (${s.step}): ${s.reason}`);
+          }
+          console.error('No files were written. Re-run with --allow-partial to write an incomplete bundle marked as such.');
         } else {
           console.log(`Exported WordPress production bundle to ${result.out_dir}`);
           console.log(`  Source blueprint: ${result.source_blueprint}`);
           console.log(`  wp-content files: ${result.wp_content_files.length}`);
           console.log(`  WP-CLI commands:  ${result.wp_cli_commands.length}`);
-          console.log(`  Next: see ${result.out_dir}/DEPLOY.md`);
+          if (!result.complete) {
+            console.error(`WARNING: incomplete export. ${blocking.length} Blueprint operation(s) were not exported:`);
+            for (const s of blocking) {
+              console.error(`  [SKIPPED] ${s.location} (${s.step}): ${s.reason}`);
+            }
+            console.log(`  Next: complete "Manual Steps Required" in ${result.out_dir}/DEPLOY.md`);
+          } else {
+            console.log(`  Next: see ${result.out_dir}/DEPLOY.md`);
+          }
         }
-        return 0;
+        return result.ok ? 0 : 1;
       }
 
       case 'mcp': {

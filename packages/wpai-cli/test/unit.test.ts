@@ -361,34 +361,196 @@ describe('wpai check-fit & catalog', () => {
 });
 
 describe('wpai export (production handoff bridge)', () => {
-  it('exports wp-content mu-plugins, WP-CLI setup.sh, and DEPLOY.md from a scaffolded project', () => {
-    const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-exp-src-'));
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-exp-out-'));
+  function tmp(prefix: string): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  }
+
+  function writeBlueprint(dir: string, bp: Record<string, unknown>): void {
+    fs.writeFileSync(
+      path.join(dir, 'blueprint.json'),
+      JSON.stringify({ $schema: 'https://playground.wordpress.net/blueprint-schema.json', ...bp }, null, 2)
+    );
+  }
+
+  it('fails safe by default on a preset with runPHP: ok false, nothing written, runPHP reported', () => {
+    const srcDir = tmp('wpai-exp-src-');
+    const outRoot = tmp('wpai-exp-out-');
+    const outDir = path.join(outRoot, 'bundle');
     try {
       initProject({ preset: 'nonprofit', dir: srcDir, name: 'Harbor Rescue' });
       const res = exportForProduction({ target: srcDir, outDir });
+      assert.equal(res.ok, false);
+      assert.equal(res.complete, false);
+      assert.deepEqual(res.files_written, []);
+      assert.equal(fs.existsSync(outDir), false, 'no bundle directory should be created');
+      const runPhp = res.skipped_steps.find((s) => s.step === 'runPHP');
+      assert.ok(runPhp, 'runPHP step must be reported');
+      assert.equal(runPhp.blocking, true);
+      assert.match(runPhp.location, /^steps\[\d+\]$/);
+      // Playground-only operations are reported but do not block; wp-content mkdir is exported, not skipped
+      assert.ok(res.skipped_steps.some((s) => s.step === 'login' && !s.blocking));
+      assert.ok(!res.skipped_steps.some((s) => s.step === 'mkdir'));
+    } finally {
+      fs.rmSync(srcDir, { recursive: true, force: true });
+      fs.rmSync(outRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('writes an incomplete bundle marked as such with allowPartial', () => {
+    const srcDir = tmp('wpai-exp-src-');
+    const outDir = tmp('wpai-exp-out-');
+    try {
+      initProject({ preset: 'nonprofit', dir: srcDir, name: 'Harbor Rescue' });
+      const res = exportForProduction({ target: srcDir, outDir, allowPartial: true });
       assert.equal(res.ok, true);
+      assert.equal(res.complete, false);
       assert.ok(res.wp_content_files.some((f) => f.endsWith('wpai-nonprofit.php')));
       assert.ok(res.wp_cli_commands.some((c) => c.includes('blogname') && c.includes('Harbor Rescue')));
-      assert.ok(fs.existsSync(path.join(outDir, 'setup.sh')));
-      assert.ok(fs.existsSync(path.join(outDir, 'DEPLOY.md')));
       assert.ok(fs.existsSync(path.join(outDir, 'blueprint.json')));
+      const deployMd = fs.readFileSync(path.join(outDir, 'DEPLOY.md'), 'utf8');
+      assert.match(deployMd, /Incomplete export/);
+      assert.match(deployMd, /## Manual Steps Required[\s\S]*runPHP/);
+      assert.match(deployMd, /## Not Exported \(Playground-Only/);
+      const setupSh = fs.readFileSync(path.join(outDir, 'setup.sh'), 'utf8');
+      assert.match(setupSh, /INCOMPLETE EXPORT/);
+      assert.doesNotMatch(setupSh, /provisioning complete/);
     } finally {
       fs.rmSync(srcDir, { recursive: true, force: true });
       fs.rmSync(outDir, { recursive: true, force: true });
     }
   });
 
-  it('works via CLI wpai export --json', () => {
-    const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-exp-cli-src-'));
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-exp-cli-out-'));
+  it('reports a complete export when every operation translates', () => {
+    const srcDir = tmp('wpai-exp-src-');
+    const outDir = tmp('wpai-exp-out-');
+    try {
+      writeBlueprint(srcDir, {
+        login: true,
+        steps: [
+          { step: 'setSiteOptions', options: { blogname: 'Plain Site' } },
+          { step: 'mkdir', path: '/wordpress/wp-content/mu-plugins' },
+          { step: 'writeFile', path: '/wordpress/wp-content/mu-plugins/hello.php', data: '<?php // hi' },
+          { step: 'mkdir', path: '/wordpress/wp-content/uploads/private' },
+          { step: 'installPlugin', pluginData: { resource: 'wordpress.org/plugins', slug: 'akismet' } },
+        ],
+      });
+      const res = exportForProduction({ target: srcDir, outDir });
+      assert.equal(res.ok, true);
+      assert.equal(res.complete, true);
+      assert.ok(
+        fs.statSync(path.join(outDir, 'wp-content', 'uploads', 'private')).isDirectory(),
+        'an empty mkdir under wp-content/ must be recreated in the bundle'
+      );
+      assert.ok(res.skipped_steps.every((s) => !s.blocking));
+      assert.deepEqual(res.wp_content_files, [path.join('wp-content', 'mu-plugins', 'hello.php')]);
+      const deployMd = fs.readFileSync(path.join(outDir, 'DEPLOY.md'), 'utf8');
+      assert.doesNotMatch(deployMd, /Manual Steps Required/);
+      assert.match(fs.readFileSync(path.join(outDir, 'setup.sh'), 'utf8'), /provisioning complete/);
+    } finally {
+      fs.rmSync(srcDir, { recursive: true, force: true });
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('flags untranslatable writeFile, plugin/theme sources, constants, and unknown steps as blocking', () => {
+    const srcDir = tmp('wpai-exp-src-');
+    const outDir = tmp('wpai-exp-out-');
+    try {
+      writeBlueprint(srcDir, {
+        constants: { WP_DEBUG: true },
+        steps: [
+          { step: 'writeFile', path: '/wordpress/wp-config-extra.php', data: '<?php' },
+          {
+            step: 'writeFile',
+            path: '/wordpress/wp-content/uploads/logo.png',
+            data: { resource: 'url', url: 'https://example.com/logo.png' },
+          },
+          { step: 'installPlugin', pluginData: { resource: 'url', url: 'https://example.com/p.zip' } },
+          { step: 'installTheme', themeData: { resource: 'url', url: 'https://example.com/t.zip' } },
+          { step: 'importWxr', file: { resource: 'url', url: 'https://example.com/content.xml' } },
+          { step: 'mkdir', path: '/wordpress/wp-content/../../etc' },
+          { step: 'installPlugin', pluginData: { resource: 'wordpress.org/plugins', slug: '  ' } },
+          { step: 'installTheme', themeData: { resource: 'wordpress.org/themes', slug: '' } },
+        ],
+      });
+      const res = exportForProduction({ target: srcDir, outDir });
+      assert.equal(res.ok, false);
+      const blocking = res.skipped_steps.filter((s) => s.blocking).map((s) => s.location);
+      assert.deepEqual(blocking, [
+        'constants',
+        'steps[0]',
+        'steps[1]',
+        'steps[2]',
+        'steps[3]',
+        'steps[4]',
+        'steps[5]',
+        'steps[6]',
+        'steps[7]',
+      ]);
+      assert.ok(!res.wp_cli_commands.some((c) => c.includes("install ''")));
+    } finally {
+      fs.rmSync(srcDir, { recursive: true, force: true });
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('CLI exits 1 without --allow-partial and 0 with it', () => {
+    const srcDir = tmp('wpai-exp-cli-src-');
+    const outRoot = tmp('wpai-exp-cli-out-');
+    const outDir = path.join(outRoot, 'bundle');
     try {
       initProject({ preset: 'course', dir: srcDir, name: 'Pottery Studio' });
-      const res = runCli(['export', srcDir, '--out', outDir, '--json']);
-      assert.equal(res.code, 0, res.stderr);
-      const parsed = JSON.parse(res.stdout) as { ok: boolean; wp_content_files: string[] };
-      assert.equal(parsed.ok, true);
-      assert.ok(parsed.wp_content_files.length >= 1);
+
+      const failed = runCli(['export', srcDir, '--out', outDir, '--json']);
+      assert.equal(failed.code, 1);
+      const failedJson = JSON.parse(failed.stdout) as { ok: boolean; skipped_steps: Array<{ step: string }> };
+      assert.equal(failedJson.ok, false);
+      assert.ok(failedJson.skipped_steps.some((s) => s.step === 'runPHP'));
+      assert.equal(fs.existsSync(outDir), false);
+
+      const human = runCli(['export', srcDir, '--out', outDir]);
+      assert.equal(human.code, 1);
+      assert.match(human.stderr, /\[SKIPPED\] steps\[\d+\] \(runPHP\)/);
+      assert.match(human.stderr, /--allow-partial/);
+
+      const partial = runCli(['export', srcDir, '--out', outDir, '--allow-partial', '--json']);
+      assert.equal(partial.code, 0, partial.stderr);
+      const partialJson = JSON.parse(partial.stdout) as { ok: boolean; complete: boolean; wp_content_files: string[] };
+      assert.equal(partialJson.ok, true);
+      assert.equal(partialJson.complete, false);
+      assert.ok(partialJson.wp_content_files.length >= 1);
+
+      const explicit = runCli(['export', srcDir, '--out', outDir, '--allow-partial=true', '--json']);
+      assert.equal(explicit.code, 0, explicit.stderr);
+      assert.equal((JSON.parse(explicit.stdout) as { ok: boolean }).ok, true);
+    } finally {
+      fs.rmSync(srcDir, { recursive: true, force: true });
+      fs.rmSync(outRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('MCP wpai_export returns isError without allow_partial and succeeds with it', async () => {
+    const srcDir = tmp('wpai-exp-mcp-src-');
+    const outDir = tmp('wpai-exp-mcp-out-');
+    try {
+      initProject({ preset: 'small-business', dir: srcDir, name: 'Sunrise Bakery' });
+      const call = (args: Record<string, unknown>) =>
+        handleMcpRequest({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'wpai_export', arguments: { target: srcDir, out_dir: outDir, ...args } },
+        });
+
+      const failed = (await call({})) as { result: { isError: boolean; content: Array<{ text: string }> } };
+      assert.equal(failed.result.isError, true);
+      assert.equal((JSON.parse(failed.result.content[0]!.text) as { ok: boolean }).ok, false);
+
+      const partial = (await call({ allow_partial: true })) as {
+        result: { isError: boolean; content: Array<{ text: string }> };
+      };
+      assert.equal(partial.result.isError, false);
+      assert.equal((JSON.parse(partial.result.content[0]!.text) as { complete: boolean }).complete, false);
     } finally {
       fs.rmSync(srcDir, { recursive: true, force: true });
       fs.rmSync(outDir, { recursive: true, force: true });
