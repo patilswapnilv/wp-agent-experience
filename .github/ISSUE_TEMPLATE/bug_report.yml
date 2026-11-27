@@ -1,0 +1,65 @@
+name: Bug Report
+description: Report a bug in wpai-cli, MCP server, blueprints, skill, registry, or benchmark harness
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the sections below so we can reproduce and fix it quickly.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of WPAI is affected?
+      options:
+        - wpai-cli (CLI commands)
+        - wpai mcp (MCP server / tools / resources)
+        - wpai export (production handoff bundle)
+        - Blueprints (blueprints/* or presets)
+        - Platform-selection skill (skills/wp-platform-selection)
+        - Capability registry (registry/wp-capabilities.json)
+        - Benchmark harness (benchmarks/)
+        - Documentation / CI
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Clear, concise description of the bug.
+      placeholder: Running `npx wpai-cli ...` failed with ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal commands or Blueprint snippet to reproduce the issue.
+      placeholder: |
+        ```bash
+        npx wpai-cli ...
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output / logs
+      description: Paste CLI stderr/stdout or JSON output (never paste secrets or tokens).
+      render: shell
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node.js version, and wpai-cli version (`wpai --version` or `npm list wpai-cli`).
+      placeholder: "macOS 15 / Ubuntu 24.04, Node v22.14.0, wpai-cli@0.2.2"
+    validations:
+      required: true
