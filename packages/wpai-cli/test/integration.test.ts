@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import type { VerifyReport } from '../src/types.js';
+import { PRESET_NAMES, type VerifyReport } from '../src/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,7 +60,7 @@ describe('wpai live WordPress Playground integration smoke test', () => {
     }
   });
 
-  for (const preset of ['small-business', 'commerce', 'publishing'] as const) {
+  for (const preset of PRESET_NAMES) {
     it(`verifies repo blueprint "${preset}" end-to-end in WordPress Playground`, () => {
       const bpDir = path.resolve(__dirname, '../../../../blueprints', preset);
       const verifyOut = execFileSync(
