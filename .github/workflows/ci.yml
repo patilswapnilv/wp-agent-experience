@@ -2,9 +2,9 @@ name: WPAI CI
 
 on:
   push:
-    branches: [main, 'feat/**']
+    branches: [main, develop, 'feat/**']
   pull_request:
-    branches: [main]
+    branches: [main, develop]
   workflow_dispatch:
 
 permissions:
