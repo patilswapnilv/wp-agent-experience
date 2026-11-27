@@ -60,3 +60,8 @@ A key operational finding during upstream audit is that `@wp-playground/cli run-
 - **Disposable WASM Runtime:** Playground runs WordPress in an isolated WebAssembly PHP runtime backed by ephemeral SQLite — never touching host databases or production sites.
 - **Least-Privilege Abilities:** Inline mu-plugins in WPAI blueprints register read-only Abilities API endpoints with explicit schemas and safe permission callbacks (`__return_true` only for public read-only metadata, never unauthenticated write operations).
 - **Minimal Plugin Surface:** Blueprints rely on WordPress core capabilities (Block Editor, Roles, Categories, REST API, Abilities API) to minimize third-party plugin vulnerability surface.
+
+## 5. Production Export Security & Parity Roadmap
+
+For the three-gate release verification model (Development, Distribution, Production Parity), the `wpai export` security threat model (trust boundaries, `wp-cli` injection, `runPHP` replay, symlink/path handling, and credential isolation), and the Stage 2 hybrid materialized export architecture, see [`docs/export-security-and-parity.md`](./export-security-and-parity.md).
+

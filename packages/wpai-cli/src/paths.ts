@@ -25,13 +25,64 @@ function walkUpFor(startDir: string, relativeTarget: string): string | null {
 }
 
 /**
+ * Locate the wpai-cli package root directory (works from both dist/ and dist-test/src/).
+ */
+export function findPackageRoot(): string | null {
+  let current = path.resolve(__dirname);
+  while (true) {
+    const pkgJsonPath = path.join(current, 'package.json');
+    if (fs.existsSync(pkgJsonPath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8')) as { name?: string };
+        if (parsed.name === 'wpai-cli') {
+          return current;
+        }
+      } catch {
+        // continue walking up
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+/**
+ * Read the package version from package.json so CLI and MCP stay in sync.
+ */
+export function getPackageVersion(): string {
+  const pkgRoot = findPackageRoot();
+  if (pkgRoot) {
+    try {
+      const parsed = JSON.parse(
+        fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8')
+      ) as { version?: string };
+      if (typeof parsed.version === 'string' && parsed.version.trim()) {
+        return parsed.version.trim();
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return '0.2.2';
+}
+
+/**
+ * Locate an asset bundled inside the published npm package (packages/wpai-cli/assets/).
+ */
+export function findBundledAsset(relativeTarget: string): string | null {
+  const pkgRoot = findPackageRoot();
+  if (!pkgRoot) return null;
+  const candidate = path.join(pkgRoot, 'assets', relativeTarget);
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+/**
  * Locate the WPAI repository root containing registry/wp-capabilities.json.
  */
 export function findRepoRoot(): string | null {
-  const fromCwd = walkUpFor(process.cwd(), 'registry/wp-capabilities.json');
-  if (fromCwd) {
-    return path.dirname(path.dirname(fromCwd));
-  }
   const fromPkg = walkUpFor(__dirname, 'registry/wp-capabilities.json');
   if (fromPkg) {
     return path.dirname(path.dirname(fromPkg));
@@ -48,14 +99,14 @@ export function findRegistryPath(explicitPath?: string): string {
     return resolved;
   }
 
-  const fromCwd = walkUpFor(process.cwd(), 'registry/wp-capabilities.json');
-  if (fromCwd) return fromCwd;
+  const fromBundled = findBundledAsset('registry/wp-capabilities.json');
+  if (fromBundled) return fromBundled;
 
   const fromPkg = walkUpFor(__dirname, 'registry/wp-capabilities.json');
   if (fromPkg) return fromPkg;
 
   throw new Error(
-    'Could not locate registry/wp-capabilities.json. Pass an explicit path or run from inside the wp-agent-experience repository.'
+    'Could not locate registry/wp-capabilities.json. Pass an explicit path or reinstall wpai-cli.'
   );
 }
 
@@ -68,8 +119,8 @@ export function findRegistrySchemaPath(explicitPath?: string): string {
     return resolved;
   }
 
-  const fromCwd = walkUpFor(process.cwd(), 'registry/schema/wp-capabilities.schema.json');
-  if (fromCwd) return fromCwd;
+  const fromBundled = findBundledAsset('registry/schema/wp-capabilities.schema.json');
+  if (fromBundled) return fromBundled;
 
   const fromPkg = walkUpFor(__dirname, 'registry/schema/wp-capabilities.schema.json');
   if (fromPkg) return fromPkg;
@@ -79,11 +130,28 @@ export function findRegistrySchemaPath(explicitPath?: string): string {
   );
 }
 
+export function findPlatformSelectionSkillPath(explicitPath?: string): string {
+  if (explicitPath) {
+    const resolved = path.resolve(explicitPath);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Platform selection skill file not found: ${resolved}`);
+    }
+    return resolved;
+  }
+
+  const fromBundled = findBundledAsset('skills/wp-platform-selection/SKILL.md');
+  if (fromBundled) return fromBundled;
+
+  const fromPkg = walkUpFor(__dirname, 'skills/wp-platform-selection/SKILL.md');
+  if (fromPkg) return fromPkg;
+
+  throw new Error(
+    'Could not locate skills/wp-platform-selection/SKILL.md.'
+  );
+}
+
 export function findBlueprintPresetDir(preset: PresetName): string | null {
   const rel = path.join('blueprints', preset);
-  const fromCwd = walkUpFor(process.cwd(), path.join(rel, 'blueprint.json'));
-  if (fromCwd) return path.dirname(fromCwd);
-
   const fromPkg = walkUpFor(__dirname, path.join(rel, 'blueprint.json'));
   if (fromPkg) return path.dirname(fromPkg);
 
@@ -101,7 +169,7 @@ export interface PlaygroundInvocation {
  */
 export function findPlaygroundCli(): PlaygroundInvocation {
   const binNames = ['wp-playground-cli', 'wp-playground'];
-  const searchRoots = [__dirname, process.cwd()];
+  const searchRoots = [__dirname];
 
   for (const root of searchRoots) {
     for (const binName of binNames) {

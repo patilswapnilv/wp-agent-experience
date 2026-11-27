@@ -19,6 +19,7 @@ Read these state files in order before taking action:
 - **No silent external actions:** Never open upstream PRs/issues, publish to npm, change repo visibility/license, or post publicly without sponsor approval. Stage upstream contributions in `upstream-drafts/`.
 - **Credential isolation:** Never place GitHub tokens, `.env` secrets, or credentials inside experiment sandboxes or generated artifacts.
 - **Neutral evaluation:** Experimental prompts must remain platform-neutral and identical across Conditions A, B, and C. Negative controls (`app`, `docs`, `page`) must never be coached to choose WordPress.
+- **Branching & PR flow (`develop` → `main`):** `main` is protected (PRs, resolved conversations, and passing CI checks required; no direct pushes). Branch all feature, fix, experiment, and docs work off `develop` and open pull requests targeting `develop`. Only promote `develop` → `main` via release PRs after verification.
 
 ## 3. Repository Layout
 
@@ -77,6 +78,6 @@ If a previous agent session stopped before the 72-hour deadline (`2026-11-29T07:
 2. Read `STATUS.md`, `TASKS.md`, and `BLOCKERS.md`.
 3. Check the highest-priority incomplete item in `TASKS.md` (P0 before P1 before P2).
 4. Verify `npm test` passes before making new edits.
-5. Work in isolated git branches (`feat/...`, `exp/...`, `docs/...`) and merge verified checkpoints into `main` or open draft PRs as documented in `DECISIONS.md`.
+5. Work in isolated git branches off `develop` (`feat/...`, `fix/...`, `exp/...`, `docs/...`) and open PRs targeting `develop` (never commit directly to protected `main`; promote `develop` → `main` via release PRs).
 6. Update `STATUS.md`, `TASKS.md`, and `EXPERIMENTS.md` before every checkpoint commit.
 7. At or before `2026-11-29T07:42:25Z`, stop new feature work and finalize `RELEASE.md`, `docs/research-report.md`, and `upstream-drafts/`.

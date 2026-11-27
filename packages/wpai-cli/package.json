@@ -1,6 +1,6 @@
 {
   "name": "wpai-cli",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Minimal TypeScript CLI & MCP server wrapping @wp-playground/cli for WordPress project scaffolding, Blueprint validation, verification, production export, and capability discovery.",
   "keywords": [
     "wordpress",
@@ -35,15 +35,18 @@
   },
   "files": [
     "dist",
+    "assets",
     "README.md"
   ],
   "engines": {
     "node": ">=22.0.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"import('node:fs').then(fs => fs.chmodSync('dist/cli.js', 0o755))\"",
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && node -e \"import('node:fs').then(fs => fs.chmodSync('dist/cli.js', 0o755))\"",
+    "prepack": "npm run build",
     "build:test": "tsc -p tsconfig.test.json",
     "test": "npm run build && npm run build:test && node --test dist-test/test/unit.test.js",
+    "test:pack": "npm run build && node scripts/test-pack.mjs",
     "test:integration": "npm run build && npm run build:test && node --test dist-test/test/integration.test.js"
   },
   "dependencies": {

@@ -1,8 +1,7 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import readline from 'node:readline';
 import { exportForProduction } from './export.js';
-import { findRepoRoot } from './paths.js';
+import { findPlatformSelectionSkillPath, getPackageVersion } from './paths.js';
 import { verifyBlueprint } from './playground.js';
 import { initProject, isValidPreset } from './presets.js';
 import { evaluateFit, loadRegistry } from './registry.js';
@@ -10,7 +9,7 @@ import { PRESET_NAMES } from './types.js';
 import { validateBlueprintFile } from './validator.js';
 
 const SERVER_NAME = 'wpai';
-const SERVER_VERSION = '0.2.0';
+const SERVER_VERSION = getPackageVersion();
 const SUPPORTED_PROTOCOL_VERSION = '2024-11-05';
 
 interface JsonRpcRequest {
@@ -125,7 +124,7 @@ const MCP_TOOLS = [
   {
     name: 'wpai_export',
     description:
-      'Export a WordPress Playground project into a production-ready deployable bundle (wp-content/, WP-CLI setup.sh, and DEPLOY.md checklist).',
+      'Export a WordPress Playground project into a deployable bundle (wp-content/, WP-CLI setup.sh, and DEPLOY.md checklist). Fails with ok: false and writes nothing when Blueprint steps cannot be translated, unless allow_partial is true; skipped_steps lists them.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -136,6 +135,11 @@ const MCP_TOOLS = [
         out_dir: {
           type: 'string',
           description: 'Output directory for the production export bundle.',
+        },
+        allow_partial: {
+          type: 'boolean',
+          description:
+            'Write the bundle even when some Blueprint steps (e.g. runPHP) cannot be translated. The result is marked complete: false and DEPLOY.md lists the manual steps. Defaults to false, which fails without writing files.',
         },
       },
       required: ['target', 'out_dir'],
@@ -244,7 +248,14 @@ async function handleToolCall(
         if (!target || !outDir) {
           throw new Error('Missing required string arguments "target" and "out_dir".');
         }
-        payload = exportForProduction({ target, outDir });
+        const exportResult = exportForProduction({ target, outDir, allowPartial: args.allow_partial === true });
+        if (!exportResult.ok) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify(exportResult, null, 2) }],
+            isError: true,
+          };
+        }
+        payload = exportResult;
         break;
       }
 
@@ -279,14 +290,7 @@ function handleResourceRead(uri: string): { contents: Array<{ uri: string; mimeT
     };
   }
   if (uri === 'wpai://skill/platform-selection') {
-    const repoRoot = findRepoRoot();
-    if (!repoRoot) {
-      throw new Error('Repository root not found for wpai://skill/platform-selection');
-    }
-    const skillPath = path.join(repoRoot, 'skills', 'wp-platform-selection', 'SKILL.md');
-    if (!fs.existsSync(skillPath)) {
-      throw new Error(`Skill file not found: ${skillPath}`);
-    }
+    const skillPath = findPlatformSelectionSkillPath();
     return {
       contents: [
         {
