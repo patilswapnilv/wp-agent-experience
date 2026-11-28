@@ -1,5 +1,17 @@
 # STATUS.md — Mission Status Log
 
+## Checkpoint `v0.2.2` — Stage 2 Materialized Export & Gate 3 MariaDB Parity Complete (2026-11-28T08:15Z)
+
+- **Stage 2 Hybrid Materialized Export (`#2`, `packages/wpai-cli/src/export.ts`):**
+  - Boots Blueprints with `runPHP` / `runPHPWithOptions` / `importWxr` steps inside isolated WordPress Playground WASM (`@wp-playground/cli@3.1.66`) and extracts `content.wxr`, declarative `wpai-state.json` (allowlisted options, slug-based `page_on_front_slug` / `page_for_posts_slug`, non-admin editorial users without passwords, local media attachment & `_thumbnail_id` manifest, custom DB table guard), changed `wp-content/` files (excluding Playground SQLite drop-ins and core defaults), `MANIFEST.sha256` (`T2`), PHP SHA-256 inventory in `DEPLOY.md`, and `scanSecretTokens()` warnings (`T5`) — with **zero raw `runPHP` replay** on production.
+  - Preserves offline `--mode static` (`exportForProduction`) and fail-safe preflight refusal on host-level untranslatable operations unless `--allow-partial` is passed.
+- **Shared Verification Probe & Gate 3 MariaDB Production Parity CI (`packages/wpai-cli/src/php/verify-probe.php`, `scripts/test-production-parity.mjs`, `.github/workflows/ci.yml`):**
+  - Extracted standalone `verify-probe.php` shared across `wpai verify` (Playground WASM) and `wpai verify-target` / `wp eval-file` (MySQL/MariaDB + live HTTP checks).
+  - Live-verified all 6 presets (`small-business`, `commerce`, `publishing`, `nonprofit`, `course`, `migration`) end-to-end on real **MariaDB 10.11 + WordPress 7.1.5 (PHP 8.3 + Apache + WP-CLI)**: `6/6` passed `MANIFEST.sha256`, `setup.sh --dry-run`, `setup.sh --yes`, `verify-probe.php`, live Apache HTTP 200 checks (`/`, required pages, `/wp-json/...`), editorial authorship mapping, and second-run `setup.sh --yes` idempotency.
+- **Full Verification Battery:** `41/41` Node unit tests + `npm run test:pack` + `9/9` live Playground integration tests + `6/6` MariaDB production parity & idempotency tests + `19/19` Python harness unit tests passing (`0` failures).
+
+---
+
 ## Checkpoint `v0.2.0` — Tracks 1, 2, and 3 Complete (2026-11-26T14:07Z)
 
 ### Track 1: Bulletproof the Evidence (Complete)

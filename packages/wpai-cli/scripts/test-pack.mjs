@@ -58,6 +58,11 @@ try {
   const wpaiEntry = path.join(installDir, 'node_modules', 'wpai-cli', 'dist', 'cli.js');
   assert.ok(fs.existsSync(wpaiEntry), `Expected installed wpai CLI entry at ${wpaiEntry}`);
 
+  for (const phpAsset of ['verify-probe.php', 'materialize-presnapshot.php', 'materialize-extract.php']) {
+    const phpPath = path.join(installDir, 'node_modules', 'wpai-cli', 'assets', 'php', phpAsset);
+    assert.ok(fs.existsSync(phpPath), `Expected bundled PHP asset in packed tarball: ${phpPath}`);
+  }
+
   function runWpai(args, options = {}) {
     if (process.platform === 'win32') {
       return run(process.execPath, [wpaiEntry, ...args], options);

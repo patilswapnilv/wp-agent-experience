@@ -9,12 +9,14 @@ import {
   deriveFallbackVerifySpec,
   evaluateFit,
   exportForProduction,
+  findVerifyProbePhpPath,
   handleMcpRequest,
   initProject,
   loadPreset,
   loadRegistry,
   PRESET_NAMES,
   sanitizeWpCliCommand,
+  scanSecretTokens,
   validateBlueprintFile,
   validateBlueprintObject,
   validateRegistry,
@@ -661,13 +663,13 @@ describe('wpai export (production handoff bridge)', () => {
     }
   });
 
-  it('T4: validates plugin/theme slugs, option names, and leading-dash values; preserves exact activatePlugin file identifiers', () => {
+  it('T4: validates plugin/theme slugs, option names, leading-dash and NUL-byte values; preserves exact activatePlugin file identifiers', () => {
     const srcDir = tmp('wpai-exp-src-');
     const outDir = tmp('wpai-exp-out-');
     try {
       writeBlueprint(srcDir, {
         plugins: ['--allow-root', 'jetpack'],
-        siteOptions: { '--exec': 'x', blogname: '--exec=phpinfo();', home: 'http://127.0.0.1' },
+        siteOptions: { '--exec': 'x', blogname: '--exec=phpinfo();', nul_flag: '\0--exec=phpinfo();', home: 'http://127.0.0.1' },
         steps: [
           { step: 'installPlugin', pluginData: { resource: 'wordpress.org/plugins', slug: 'Bad Slug' } },
           { step: 'installTheme', themeData: { resource: 'wordpress.org/themes', slug: '--force' } },
@@ -693,6 +695,7 @@ describe('wpai export (production handoff bridge)', () => {
         'siteOptions',
         'siteOptions',
         'siteOptions',
+        'siteOptions',
         'plugins[0]',
         'steps[0]',
         'steps[1]',
@@ -705,8 +708,9 @@ describe('wpai export (production handoff bridge)', () => {
     }
   });
 
-  it('T3/T5: never follows symlinks, excludes *.env* / *.sqlite* variants, and cleans reused outDir', () => {
+  it('T3/T5: never follows symlinks (including dangling), excludes *.env* / *.sqlite* variants, redacts sensitive writeFile data, and cleans reused outDir', () => {
     const srcDir = tmp('wpai-exp-src-');
+    const danglingDir = tmp('wpai-exp-dangling-');
     const secretDir = tmp('wpai-exp-secret-');
     const outDir = tmp('wpai-exp-out-');
     try {
@@ -733,6 +737,13 @@ describe('wpai export (production handoff bridge)', () => {
       fs.writeFileSync(path.join(wpContent, 'debug.log'), 'trace');
       fs.symlinkSync(secretDir, path.join(wpContent, 'plugins'));
       fs.symlinkSync(path.join(secretDir, 'id_rsa'), path.join(wpContent, 'themes', 'mine', 'key.txt'));
+
+      // Dangling root wp-content symlink must still be caught and fail safe
+      writeBlueprint(danglingDir, { steps: [{ step: 'setSiteOptions', options: { blogname: 'Dangling' } }] });
+      fs.symlinkSync(path.join(danglingDir, 'does-not-exist'), path.join(danglingDir, 'wp-content'));
+      const danglingRes = exportForProduction({ target: danglingDir, outDir: path.join(outDir, 'dangling') });
+      assert.equal(danglingRes.ok, false, 'dangling wp-content symlink must fail safe');
+      assert.ok(danglingRes.skipped_steps.some((s) => s.location === 'wp-content' && s.blocking));
 
       const strict = exportForProduction({ target: srcDir, outDir: path.join(outDir, 'strict') });
       assert.equal(strict.ok, false, 'symlinks are blocking so nothing is silently missing');
@@ -771,8 +782,12 @@ describe('wpai export (production handoff bridge)', () => {
         !bundled.some((f) => /id_rsa|key\.txt|wp-config|\.env|\.sql|\.sqlite|debug\.log|\.htaccess|stale/.test(f)),
         bundled.join(',')
       );
+      const exportedBpText = fs.readFileSync(path.join(outDir, 'blueprint.json'), 'utf8');
+      assert.doesNotMatch(exportedBpText, /API_KEY=1|Allow from all/, 'sensitive writeFile payloads must be redacted in bundled blueprint.json');
+      assert.match(exportedBpText, /REDACTED by wpai export/);
     } finally {
       fs.rmSync(srcDir, { recursive: true, force: true });
+      fs.rmSync(danglingDir, { recursive: true, force: true });
       fs.rmSync(secretDir, { recursive: true, force: true });
       fs.rmSync(outDir, { recursive: true, force: true });
     }
@@ -826,63 +841,140 @@ describe('wpai export (production handoff bridge)', () => {
     }
   });
 
-  it('CLI exits 1 without --allow-partial and 0 with it', () => {
+  it('CLI exits 1 without --allow-partial and 0 with it in --mode static and on untranslatable host steps', () => {
     const srcDir = tmp('wpai-exp-cli-src-');
+    const hostUntranslatableDir = tmp('wpai-exp-cli-host-');
     const outRoot = tmp('wpai-exp-cli-out-');
     const outDir = path.join(outRoot, 'bundle');
     try {
       initProject({ preset: 'course', dir: srcDir, name: 'Pottery Studio' });
 
-      const failed = runCli(['export', srcDir, '--out', outDir, '--json']);
+      const failed = runCli(['export', srcDir, '--out', outDir, '--mode', 'static', '--json']);
       assert.equal(failed.code, 1);
-      const failedJson = JSON.parse(failed.stdout) as { ok: boolean; skipped_steps: Array<{ step: string }> };
+      const failedJson = JSON.parse(failed.stdout) as { ok: boolean; mode: string; skipped_steps: Array<{ step: string }> };
       assert.equal(failedJson.ok, false);
+      assert.equal(failedJson.mode, 'static');
       assert.ok(failedJson.skipped_steps.some((s) => s.step === 'runPHP'));
       assert.equal(fs.existsSync(outDir), false);
 
-      const human = runCli(['export', srcDir, '--out', outDir]);
+      const human = runCli(['export', srcDir, '--out', outDir, '--mode=static']);
       assert.equal(human.code, 1);
       assert.match(human.stderr, /\[SKIPPED\] steps\[\d+\] \(runPHP\)/);
       assert.match(human.stderr, /--allow-partial/);
 
-      const partial = runCli(['export', srcDir, '--out', outDir, '--allow-partial', '--json']);
+      // Default --mode auto also fast-fails before Playground boot when host-level constants exist
+      writeBlueprint(hostUntranslatableDir, {
+        constants: { WP_DEBUG: true },
+        steps: [{ step: 'runPHP', code: "<?php require_once '/wordpress/wp-load.php';" }],
+      });
+      const hostFailed = runCli(['export', hostUntranslatableDir, '--out', outDir, '--json']);
+      assert.equal(hostFailed.code, 1);
+      const hostFailedJson = JSON.parse(hostFailed.stdout) as { ok: boolean; mode: string; skipped_steps: Array<{ step: string }> };
+      assert.equal(hostFailedJson.ok, false);
+      assert.equal(hostFailedJson.mode, 'materialized');
+      assert.ok(hostFailedJson.skipped_steps.some((s) => s.step === 'constants'));
+      assert.equal(fs.existsSync(outDir), false);
+
+      const partial = runCli(['export', srcDir, '--out', outDir, '--mode', 'static', '--allow-partial', '--json']);
       assert.equal(partial.code, 0, partial.stderr);
       const partialJson = JSON.parse(partial.stdout) as { ok: boolean; complete: boolean; wp_content_files: string[] };
       assert.equal(partialJson.ok, true);
       assert.equal(partialJson.complete, false);
       assert.ok(partialJson.wp_content_files.length >= 1);
 
-      const explicit = runCli(['export', srcDir, '--out', outDir, '--allow-partial=true', '--json']);
+      const explicit = runCli(['export', srcDir, '--out', outDir, '--mode', 'static', '--allow-partial=true', '--json']);
       assert.equal(explicit.code, 0, explicit.stderr);
       assert.equal((JSON.parse(explicit.stdout) as { ok: boolean }).ok, true);
     } finally {
       fs.rmSync(srcDir, { recursive: true, force: true });
+      fs.rmSync(hostUntranslatableDir, { recursive: true, force: true });
       fs.rmSync(outRoot, { recursive: true, force: true });
     }
   });
 
-  it('MCP wpai_export returns isError without allow_partial and succeeds with it', async () => {
+  it('MCP wpai_export returns isError without allow_partial in static or untranslatable cases and succeeds with it', async () => {
     const srcDir = tmp('wpai-exp-mcp-src-');
+    const hostDir = tmp('wpai-exp-mcp-host-');
     const outDir = tmp('wpai-exp-mcp-out-');
     try {
       initProject({ preset: 'small-business', dir: srcDir, name: 'Sunrise Bakery' });
-      const call = (args: Record<string, unknown>) =>
+      const call = (target: string, args: Record<string, unknown>) =>
         handleMcpRequest({
           jsonrpc: '2.0',
           id: 1,
           method: 'tools/call',
-          params: { name: 'wpai_export', arguments: { target: srcDir, out_dir: outDir, ...args } },
+          params: { name: 'wpai_export', arguments: { target, out_dir: outDir, ...args } },
         });
 
-      const failed = (await call({})) as { result: { isError: boolean; content: Array<{ text: string }> } };
+      const failed = (await call(srcDir, { mode: 'static' })) as {
+        result: { isError: boolean; content: Array<{ text: string }> };
+      };
       assert.equal(failed.result.isError, true);
       assert.equal((JSON.parse(failed.result.content[0]!.text) as { ok: boolean }).ok, false);
 
-      const partial = (await call({ allow_partial: true })) as {
+      writeBlueprint(hostDir, {
+        constants: { WP_CACHE: true },
+        steps: [{ step: 'runPHP', code: "<?php require_once '/wordpress/wp-load.php';" }],
+      });
+      const hostFailed = (await call(hostDir, {})) as {
+        result: { isError: boolean; content: Array<{ text: string }> };
+      };
+      assert.equal(hostFailed.result.isError, true);
+
+      const partial = (await call(srcDir, { mode: 'static', allow_partial: true })) as {
         result: { isError: boolean; content: Array<{ text: string }> };
       };
       assert.equal(partial.result.isError, false);
       assert.equal((JSON.parse(partial.result.content[0]!.text) as { complete: boolean }).complete, false);
+    } finally {
+      fs.rmSync(srcDir, { recursive: true, force: true });
+      fs.rmSync(hostDir, { recursive: true, force: true });
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('T2/T5: emits verifiable MANIFEST.sha256, PHP SHA-256 inventory, and secret_warnings without leaking raw tokens', () => {
+    const srcDir = tmp('wpai-exp-manifest-src-');
+    const outDir = tmp('wpai-exp-manifest-out-');
+    // Synthetic test-only strings matching common credential prefixes (never real keys)
+    const fakeSk = `sk-proj-${'A1b2C3d4E5f6'.repeat(2)}`;
+    const fakeGhp = `ghp_${'Z9y8X7w6V5u4'.repeat(2)}`;
+    const fakeAkia = 'AKIAIOSFODNN7EXAMPLE';
+    try {
+      writeBlueprint(srcDir, {
+        steps: [
+          { step: 'setSiteOptions', options: { blogname: 'Manifest Site' } },
+          {
+            step: 'writeFile',
+            path: '/wordpress/wp-content/mu-plugins/custom-integration.php',
+            data: `<?php\n// synthetic token check\n$k1 = '${fakeSk}';\n$k2 = '${fakeGhp}';\n$k3 = '${fakeAkia}';\n`,
+          },
+        ],
+      });
+
+      const directScan = scanSecretTokens('test.php', `$a = "${fakeSk}";`);
+      assert.equal(directScan.length, 1);
+      assert.equal(directScan[0]?.pattern, 'openai-or-anthropic-secret-key');
+      assert.doesNotMatch(JSON.stringify(directScan), new RegExp(fakeSk));
+
+      const res = exportForProduction({ target: srcDir, outDir });
+      assert.equal(res.ok, true);
+      assert.ok(res.files_written.includes('MANIFEST.sha256'));
+      assert.ok(res.secret_warnings.length >= 3);
+      assert.doesNotMatch(
+        JSON.stringify(res.secret_warnings),
+        new RegExp(`${fakeSk}|${fakeGhp}|${fakeAkia}`),
+        'secret_warnings must never echo matched token strings'
+      );
+
+      const deployMd = fs.readFileSync(path.join(outDir, 'DEPLOY.md'), 'utf8');
+      assert.match(deployMd, /## PHP Code Inventory/);
+      assert.match(deployMd, /wp-content\/mu-plugins\/custom-integration\.php` \(`sha256:[0-9a-f]{64}`\)/);
+      assert.match(deployMd, /Security review warning/);
+      assert.doesNotMatch(deployMd, new RegExp(`${fakeSk}|${fakeGhp}|${fakeAkia}`));
+
+      const shaCheck = spawnSync('sha256sum', ['-c', 'MANIFEST.sha256'], { cwd: outDir, encoding: 'utf8' });
+      assert.equal(shaCheck.status, 0, shaCheck.stderr || shaCheck.stdout);
     } finally {
       fs.rmSync(srcDir, { recursive: true, force: true });
       fs.rmSync(outDir, { recursive: true, force: true });
@@ -891,6 +983,21 @@ describe('wpai export (production handoff bridge)', () => {
 });
 
 describe('wpai bundled asset resolution precedence', () => {
+  it('resolves standalone verify-probe.php from bundled/package assets and ignores spoofed cwd files', () => {
+    const spoofDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-spoof-probe-'));
+    const origCwd = process.cwd();
+    try {
+      fs.mkdirSync(path.join(spoofDir, 'php'), { recursive: true });
+      fs.writeFileSync(path.join(spoofDir, 'php', 'verify-probe.php'), '<?php die("spoof");', 'utf8');
+      process.chdir(spoofDir);
+      const probe = findVerifyProbePhpPath();
+      assert.ok(fs.existsSync(probe));
+      assert.ok(!probe.startsWith(spoofDir), `Expected package probe path, got ${probe}`);
+    } finally {
+      process.chdir(origCwd);
+      fs.rmSync(spoofDir, { recursive: true, force: true });
+    }
+  });
   it('prefers bundled package assets over untrusted files in process.cwd() unless an explicit path is passed', () => {
     const spoofDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-spoof-cwd-'));
     try {

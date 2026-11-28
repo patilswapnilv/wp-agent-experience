@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { exportForProduction } from './export.js';
+import { exportProjectForProduction } from './export.js';
 import { runMcpStdioServer } from './mcp.js';
 import { getPackageVersion } from './paths.js';
-import { bootBlueprint, verifyBlueprint } from './playground.js';
+import { bootBlueprint, verifyBlueprint, verifyTarget } from './playground.js';
 import { initProject, isValidPreset } from './presets.js';
 import { evaluateFit, loadRegistry, validateRegistry } from './registry.js';
-import { PRESET_NAMES } from './types.js';
+import { type ExportMode, PRESET_NAMES } from './types.js';
 import { validateBlueprintFile } from './validator.js';
 
 const VERSION = getPackageVersion();
@@ -18,6 +18,7 @@ interface ParsedArgs {
 const BOOLEAN_FLAGS = new Set([
   'json',
   'allow-partial',
+  'allow-root',
   'headless',
   'help',
   'h',
@@ -90,7 +91,8 @@ Usage:
   wpai validate <blueprint-path> [--json]
   wpai boot <dir-or-blueprint> [--headless] [--port <port>] [--wp <ver>] [--php <ver>] [--json]
   wpai verify <dir-or-blueprint> [--checks <verify.json>] [--timeout <ms>] [--wp <ver>] [--php <ver>] [--json]
-  wpai export <dir-or-blueprint> [--out <dir>] [--allow-partial] [--json]
+  wpai verify-target <wp-path> --checks <verify.json> [--url <base-url>] [--allow-root] [--timeout <ms>] [--json]
+  wpai export <dir-or-blueprint> [--out <dir>] [--mode <auto|materialized|static>] [--allow-partial] [--timeout <ms>] [--wp <ver>] [--php <ver>] [--json]
   wpai mcp
   wpai catalog [--registry <path>] [--json]
   wpai check-fit "<prompt>" [--registry <path>] [--json]
@@ -379,11 +381,92 @@ async function main(): Promise<number> {
         return result.valid ? 0 : 1;
       }
 
+      case 'verify-target': {
+        const wpPath = positionals[0];
+        const checksPath = getStringFlag(flags, 'checks');
+        if (!wpPath || !checksPath) {
+          const msg =
+            'Missing <wp-path> or --checks <verify.json>. Usage: wpai verify-target <wp-path> --checks <verify.json> [--url <base-url>] [--allow-root] [--timeout <ms>] [--json]';
+          if (asJson) {
+            console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+          } else {
+            console.error(`Error: ${msg}`);
+          }
+          return 1;
+        }
+
+        const timeoutStr = getStringFlag(flags, 'timeout');
+        const timeoutMs = timeoutStr ? Number.parseInt(timeoutStr, 10) : 60000;
+        if (timeoutStr && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
+          const msg = `Invalid --timeout value "${timeoutStr}". Must be positive milliseconds.`;
+          if (asJson) {
+            console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+          } else {
+            console.error(`Error: ${msg}`);
+          }
+          return 1;
+        }
+
+        const report = await verifyTarget({
+          wpPath,
+          checksPath,
+          url: getStringFlag(flags, 'url'),
+          wpArgs: getBoolFlag(flags, 'allow-root') ? ['--allow-root'] : [],
+          timeoutMs,
+        });
+
+        if (asJson) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          const status = report.ok ? 'PASS' : 'FAIL';
+          console.log(`VERIFY-TARGET ${status} (${report.duration_ms}ms) — ${report.blueprint}`);
+          for (const check of report.checks) {
+            const mark = check.passed ? 'PASS' : 'FAIL';
+            console.log(`  [${mark}] ${check.name}: ${check.detail}`);
+          }
+          if (report.error) {
+            console.error(`  Error: ${report.error}`);
+          }
+        }
+        return report.ok ? 0 : 1;
+      }
+
       case 'export': {
         const target = positionals[0] ?? '.';
         const outDir = getStringFlag(flags, 'out') ?? './dist-wp';
         const allowPartial = getBoolFlag(flags, 'allow-partial');
-        const result = exportForProduction({ target, outDir, allowPartial });
+        const rawMode = getStringFlag(flags, 'mode') ?? 'auto';
+        if (rawMode !== 'auto' && rawMode !== 'materialized' && rawMode !== 'static') {
+          const msg = `Invalid --mode value "${rawMode}". Expected one of: auto, materialized, static.`;
+          if (asJson) {
+            console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+          } else {
+            console.error(`Error: ${msg}`);
+          }
+          return 1;
+        }
+
+        const timeoutStr = getStringFlag(flags, 'timeout');
+        const timeoutMs = timeoutStr ? Number.parseInt(timeoutStr, 10) : 90000;
+        if (timeoutStr && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
+          const msg = `Invalid --timeout value "${timeoutStr}". Must be positive milliseconds.`;
+          if (asJson) {
+            console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+          } else {
+            console.error(`Error: ${msg}`);
+          }
+          return 1;
+        }
+
+        const result = await exportProjectForProduction({
+          target,
+          outDir,
+          allowPartial,
+          mode: rawMode as ExportMode,
+          timeoutMs,
+          wp: getStringFlag(flags, 'wp'),
+          php: getStringFlag(flags, 'php'),
+        });
         const blocking = result.skipped_steps.filter((s) => s.blocking);
 
         if (asJson) {
@@ -395,10 +478,18 @@ async function main(): Promise<number> {
           }
           console.error('No files were written. Re-run with --allow-partial to write an incomplete bundle marked as such.');
         } else {
-          console.log(`Exported WordPress production bundle to ${result.out_dir}`);
+          console.log(`Exported WordPress production bundle (${result.mode} mode) to ${result.out_dir}`);
           console.log(`  Source blueprint: ${result.source_blueprint}`);
           console.log(`  wp-content files: ${result.wp_content_files.length}`);
           console.log(`  WP-CLI commands:  ${result.wp_cli_commands.length}`);
+          if (result.materialized) {
+            console.log(
+              `  Materialized:     ${result.materialized.wxr_file} + ${result.materialized.state_file} (users=${result.materialized.users_count}, attachments=${result.materialized.attachments_count})`
+            );
+          }
+          for (const warn of result.secret_warnings) {
+            console.error(`  [WARN] Potential secret pattern (${warn.pattern}) in ${warn.file}:${warn.line}`);
+          }
           if (!result.complete) {
             console.error(`WARNING: incomplete export. ${blocking.length} Blueprint operation(s) were not exported:`);
             for (const s of blocking) {

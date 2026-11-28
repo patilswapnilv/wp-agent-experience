@@ -45,7 +45,7 @@ flowchart TD
     B -->|"WordPress Fits<br/>(business, store, blog, nonprofit, course, migration)"| C["Layer 2: wpai-cli (CLI & MCP Server)<br/>wpai check-fit · init · validate · verify · export"]
     B -->|"Negative Control<br/>(SaaS app, CLI/API docs, single static page)"| D["Appropriate Non-WP Stack<br/>(App framework + Postgres, Starlight/VitePress, Static HTML)"]
     C -->|"invokes pinned @wp-playground/cli@3.1.66"| E["Layer 3: Disposable WASM Runtime<br/>WordPress 7.x + PHP 8.3 + SQLite + Abilities API<br/>Deterministic /wpai-out/report.json"]
-    E -->|"100% checks pass"| F["Layer 4: Fail-Safe Production Handoff<br/>wp-content/ + WP-CLI setup.sh + DEPLOY.md"]
+    E -->|"100% checks pass"| F["Layer 4: Materialized Production Handoff<br/>wp-content/ + content.wxr + wpai-state.json + setup.sh + MANIFEST.sha256"]
 ```
 
 ---
@@ -69,10 +69,9 @@ npx wpai-cli validate ./my-bakery/blueprint.json --json
 # 4. Boot and functionally verify live inside WordPress Playground (WASM PHP 8.3 + SQLite)
 npx wpai-cli verify ./my-bakery --json
 
-# 5. Export a production handoff bundle (wp-content/ + WP-CLI setup.sh + DEPLOY.md).
-#    Fails safely by default when Blueprint steps (e.g. runPHP seeding) cannot be translated;
-#    pass --allow-partial to write the bundle and list required manual steps in DEPLOY.md.
-npx wpai-cli export ./my-bakery --out ./dist-wp --allow-partial
+# 5. Export a complete MySQL/MariaDB production bundle (wp-content/ + content.wxr +
+#    wpai-state.json + WP-CLI setup.sh + MANIFEST.sha256 + DEPLOY.md) — zero raw PHP replay.
+npx wpai-cli export ./my-bakery --out ./dist-wp
 ```
 
 Or install globally to use the `wpai` binary directly:
@@ -108,7 +107,7 @@ Add `wpai-cli` to **Claude Code**, **Cursor**, **Codex**, **Antigravity**, **Ope
 | **Tool** | `wpai_init` | Scaffolds any of the 6 verified WordPress Playground presets (`blueprint.json` + `verify.json`) |
 | **Tool** | `wpai_validate` | Strict Blueprint v1 JSON structural validator |
 | **Tool** | `wpai_verify` | Boots and functionally verifies a site live in WordPress Playground (auto-mounts sibling `wp-content/`) |
-| **Tool** | `wpai_export` | Exports `wp-content/`, `setup.sh`, and `DEPLOY.md`; fails safe (`isError: true`) with `skipped_steps` unless `allow_partial: true` |
+| **Tool** | `wpai_export` | Exports materialized `wp-content/`, `content.wxr`, `wpai-state.json`, `setup.sh`, `MANIFEST.sha256`, and `DEPLOY.md`; fails safe (`isError: true`) on host-level untranslatable steps unless `allow_partial: true` |
 | **Resource** | `wpai://registry/capabilities` | Machine-readable, schema-validated WordPress capability registry (`application/json`) |
 | **Resource** | `wpai://skill/platform-selection` | Portable, neutral platform-selection `SKILL.md` (`text/markdown`) |
 
@@ -120,11 +119,12 @@ Add `wpai-cli` to **Claude Code**, **Cursor**, **Codex**, **Antigravity**, **Ope
 |---|---|---|
 | `wpai check-fit "<prompt>"` | Evaluate WordPress suitability with honest negative controls | `--json`, `--registry <path>` |
 | `wpai catalog` | Inspect capabilities, suitable use cases, negative controls, and presets | `--json`, `--registry <path>` |
-| `wpai init <preset>` | Scaffold a verified Blueprint + `verify.json` project | `--dir <path>`, `--name "<title>"`, `--force`, `--json` |
+| `wpai init <preset>` | Scaffold a verified Blueprint + `verify.json` project | `--dir <path>`, `--name "<title>"`, `--wp <ver>`, `--php <ver>`, `--json` |
 | `wpai validate <path>` | Statically validate Blueprint v1 schema & common pitfalls | `--json` |
 | `wpai boot <path>` | Boot a Blueprint locally in WordPress Playground | `--port <n>`, `--headless` |
 | `wpai verify <path>` | Live-boot in Playground and assert pages, CPTs, REST API, Abilities API, zero PHP errors | `--checks <verify.json>`, `--timeout <ms>`, `--json` |
-| `wpai export <path>` | Extract `wp-content/`, WP-CLI `setup.sh`, and `DEPLOY.md` for production | `--out <dir>`, `--allow-partial`, `--json` |
+| `wpai verify-target <wp-path>` | Verify a live MySQL/MariaDB WordPress install via shared `verify-probe.php` + live HTTP checks | `--checks <verify.json>`, `--url <base-url>`, `--allow-root`, `--json` |
+| `wpai export <path>` | Materialize `wp-content/`, `content.wxr`, `wpai-state.json`, WP-CLI `setup.sh`, `MANIFEST.sha256`, and `DEPLOY.md` for production | `--out <dir>`, `--mode <auto\|materialized\|static>`, `--allow-partial`, `--json` |
 | `wpai validate-registry` | Validate `registry/wp-capabilities.json` against Draft 2020-12 JSON Schema | `--schema <path>`, `--json` |
 | `wpai mcp` | Start zero-dependency JSON-RPC 2.0 MCP server over stdio | — |
 
@@ -174,9 +174,9 @@ Evaluated on verbatim, platform-neutral prompts from [`apeatling/wp-agent-benchm
 
 ### Engineering Roadmap (`wpai-cli`)
 - [x] **v0.2.2:** Bundle `registry/` and `skills/wp-platform-selection/` in npm tarball (`#1`), harden `src/paths.ts` against `cwd` shadowing (`T6`), add `npm run test:pack` CI smoke test, and ship Stage 1 fail-safe `wpai export` (`#2` Stage 1, contributed by [`@deshabhishek007`](https://github.com/deshabhishek007)).
-- [x] **Export Security Hardening (`T1`, `T3`, `T4`, `T5`, `T7`):** Allowlisted `wp-cli` step tokenization, symlink/traversal guards, slug regex validation, sensitive-file denylist, and `--dry-run` / confirmation prompt in `setup.sh` (see [`docs/export-security-and-parity.md`](./docs/export-security-and-parity.md)).
-- [ ] **Stage 2 Materialized Export (`#2`):** Hybrid `content.wxr` + `wpai-state.json` + `MANIFEST.sha256` exporter with local attachment import and zero raw `runPHP` replay.
-- [ ] **Gate 3 Production Parity CI:** Automated Docker MariaDB + WordPress parity & idempotency suite running a shared `verify-probe.php` across all 6 presets.
+- [x] **Export Security Hardening (`T1`, `T3`, `T4`, `T5`, `T7`):** Allowlisted `wp-cli` step tokenization, symlink/traversal guards, slug regex validation, sensitive-file denylist + token scanner, and `--dry-run` / confirmation prompt in `setup.sh` (see [`docs/export-security-and-parity.md`](./docs/export-security-and-parity.md)).
+- [x] **Stage 2 Materialized Export (`#2`):** Hybrid `content.wxr` + `wpai-state.json` + `MANIFEST.sha256` exporter with non-admin editorial user mapping, local attachment import, and zero raw `runPHP` replay.
+- [x] **Gate 3 Production Parity CI:** Automated Docker MariaDB 10.11 + WordPress parity & idempotency suite running the shared `verify-probe.php` + live HTTP assertions across all 6 presets.
 
 ---
 
@@ -207,13 +207,14 @@ npm ci && npm run build
 # 2. Validate capability registry & all 6 blueprints
 npm run validate
 
-# 3. Run unit tests (31 Node tests), standalone npm tarball smoke test, and Python harness tests (19 tests)
+# 3. Run unit tests (41 Node tests), standalone npm tarball smoke test, and Python harness tests (19 tests)
 npm test
 npm run test:pack
 python3 -m unittest discover -s benchmarks/harness -p 'test_*.py' -v
 
-# 4. Run live WordPress Playground integration tests
+# 4. Run live WordPress Playground integration tests (Gate 1) & MariaDB production parity tests (Gate 3)
 npm run test:integration
+npm run test:parity
 
 # 5. Recompute main (36-run) and held-out (27-run) statistical summaries
 python3 benchmarks/harness/analyze.py
