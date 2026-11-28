@@ -65,9 +65,12 @@ export interface ValidationResult {
   warnings: ValidationIssue[];
 }
 
+export type ExportMode = 'auto' | 'materialized' | 'static';
+
 export interface VerifySpec {
   blueprint?: string;
   expected_blogname?: string;
+  required_front_page_slug?: string;
   required_pages?: string[];
   required_posts_min?: number | Record<string, number>;
   required_post_types?: string[];
@@ -110,10 +113,18 @@ export interface VerifyReport {
     categories: number;
     users: number;
   };
+  front_page?: {
+    show_on_front: string | null;
+    page_on_front: number;
+    page_on_front_slug: string | null;
+    page_for_posts: number;
+    page_for_posts_slug: string | null;
+  };
   rest_api: {
     types_status: number | null;
     routes: Record<string, number>;
   };
+  http_checks?: Record<string, number>;
   php_last_error: {
     type: number;
     message: string;

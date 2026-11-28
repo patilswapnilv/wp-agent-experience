@@ -174,6 +174,41 @@ export function findBlueprintPresetDir(preset: PresetName): string | null {
   return resolveBlueprintPresetDir(preset)?.dir ?? null;
 }
 
+/**
+ * Locate a bundled PHP probe/extractor script (`assets/php/<file>` first, then `src/php/<file>`;
+ * never `process.cwd()`, per T6).
+ */
+export function findPhpAssetPath(
+  fileName: 'verify-probe.php' | 'materialize-presnapshot.php' | 'materialize-extract.php',
+  explicitPath?: string
+): string {
+  if (explicitPath) {
+    const resolved = path.resolve(explicitPath);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`PHP helper script not found: ${resolved}`);
+    }
+    return resolved;
+  }
+
+  const fromBundled = findBundledAsset(path.join('php', fileName));
+  if (fromBundled) return fromBundled;
+
+  const pkgRoot = findPackageRoot();
+  if (pkgRoot) {
+    const fromSrc = path.join(pkgRoot, 'src', 'php', fileName);
+    if (fs.existsSync(fromSrc)) return fromSrc;
+  }
+
+  const fromWalk = walkUpFor(__dirname, path.join('packages', 'wpai-cli', 'src', 'php', fileName));
+  if (fromWalk) return fromWalk;
+
+  throw new Error(`Could not locate PHP asset "${fileName}". Run "npm run build" or reinstall wpai-cli.`);
+}
+
+export function findVerifyProbePhpPath(explicitPath?: string): string {
+  return findPhpAssetPath('verify-probe.php', explicitPath);
+}
+
 export interface PlaygroundInvocation {
   command: string;
   baseArgs: string[];

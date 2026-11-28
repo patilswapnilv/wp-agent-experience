@@ -5,7 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { PRESET_NAMES, type VerifyReport } from '../src/types.js';
+import {
+  type ExportResult,
+  handleMcpRequest,
+  type MaterializedState,
+  PRESET_NAMES,
+  type VerifyReport,
+} from '../src/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -139,5 +145,103 @@ describe('wpai live WordPress Playground integration smoke test', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('materializes runPHP presets into content.wxr + wpai-state.json + MANIFEST.sha256 via CLI and MCP without --allow-partial', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-stage2-int-'));
+    try {
+      // 1. CLI Stage 2 export on small-business (5 pages + 1 post + static front page + posts page)
+      const sbSite = path.join(tmpDir, 'sb-site');
+      const sbOut = path.join(tmpDir, 'sb-dist');
+      execFileSync(
+        process.execPath,
+        [cliEntry, 'init', 'small-business', '--dir', sbSite, '--name', 'Test Co', '--json'],
+        { encoding: 'utf8' }
+      );
+      const sbExpRaw = execFileSync(
+        process.execPath,
+        [cliEntry, 'export', sbSite, '--out', sbOut, '--timeout', '90000', '--json'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+      const sbExp = JSON.parse(sbExpRaw) as ExportResult;
+      assert.equal(sbExp.ok, true, JSON.stringify(sbExp.skipped_steps));
+      assert.equal(sbExp.complete, true);
+      assert.equal(sbExp.mode, 'materialized');
+      assert.deepEqual(sbExp.wp_content_files, [path.join('wp-content', 'mu-plugins', 'wpai-business.php')]);
+      assert.equal(sbExp.materialized?.page_on_front_slug, 'home');
+      assert.equal(sbExp.materialized?.page_for_posts_slug, 'updates');
+
+      const sbWxr = fs.readFileSync(path.join(sbOut, 'content.wxr'), 'utf8');
+      for (const slug of ['home', 'services', 'about', 'contact', 'updates', 'autumn-pastry-menu']) {
+        assert.match(sbWxr, new RegExp(`<wp:post_name><!\\[CDATA\\[${slug}\\]\\]></wp:post_name>|<wp:post_name>${slug}</wp:post_name>`));
+      }
+      assert.doesNotMatch(sbWxr, /sample-page|hello-world/, 'untouched default install boilerplate should be stripped');
+
+      const shaRes = spawnSync('sha256sum', ['-c', 'MANIFEST.sha256'], { cwd: sbOut, encoding: 'utf8' });
+      assert.equal(shaRes.status, 0, shaRes.stderr || shaRes.stdout);
+
+      // Dry-run of materialized setup.sh must never invoke wp
+      const emptyPathEnv = { ...process.env, PATH: '/usr/bin:/bin' };
+      const dryRes = spawnSync('bash', [path.join(sbOut, 'setup.sh'), '--dry-run'], {
+        cwd: sbOut,
+        env: emptyPathEnv,
+        encoding: 'utf8',
+      });
+      assert.equal(dryRes.status, 0, dryRes.stderr);
+      assert.match(dryRes.stdout, /content\.wxr/);
+      assert.match(dryRes.stdout, /Dry run complete; nothing was changed/);
+
+      // 2. MCP wpai_export on publishing (categories + 4 articles + 3 non-admin editorial users)
+      const pubDir = path.resolve(__dirname, '../../../../blueprints/publishing');
+      const pubOut = path.join(tmpDir, 'pub-dist');
+      const mcpResp = (await handleMcpRequest({
+        jsonrpc: '2.0',
+        id: 42,
+        method: 'tools/call',
+        params: { name: 'wpai_export', arguments: { target: pubDir, out_dir: pubOut } },
+      })) as { result: { isError: boolean; content: Array<{ text: string }> } };
+      assert.equal(mcpResp.result.isError, false, mcpResp.result.content[0]?.text);
+      const pubExp = JSON.parse(mcpResp.result.content[0]!.text) as ExportResult;
+      assert.equal(pubExp.ok, true);
+      assert.equal(pubExp.complete, true);
+      assert.equal(pubExp.mode, 'materialized');
+      assert.equal(pubExp.materialized?.users_count, 3);
+
+      const pubState = JSON.parse(fs.readFileSync(path.join(pubOut, 'wpai-state.json'), 'utf8')) as MaterializedState;
+      const logins = pubState.users.map((u) => `${u.user_login}:${u.role}`).sort();
+      assert.deepEqual(logins, ['david_author:author', 'maya_editor:editor', 'priya_contributor:contributor']);
+      assert.doesNotMatch(JSON.stringify(pubState), /user_pass|administrator/);
+
+      // 3. Custom non-core DB tables created by runPHP fail safe unless --allow-partial is passed
+      const customTblDir = path.join(tmpDir, 'custom-tbl-site');
+      const customTblOut = path.join(tmpDir, 'custom-tbl-dist');
+      fs.mkdirSync(customTblDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(customTblDir, 'blueprint.json'),
+        JSON.stringify({
+          $schema: 'https://playground.wordpress.net/blueprint-schema.json',
+          steps: [
+            {
+              step: 'runPHP',
+              code: "<?php require_once '/wordpress/wp-load.php'; global $wpdb; $wpdb->query(\"CREATE TABLE {$wpdb->prefix}custom_ledger (id INT PRIMARY KEY)\");",
+            },
+          ],
+        }),
+        'utf8'
+      );
+      const tblFail = spawnSync(
+        process.execPath,
+        [cliEntry, 'export', customTblDir, '--out', customTblOut, '--json'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+      assert.equal(tblFail.status, 1);
+      const tblFailJson = JSON.parse(tblFail.stdout) as ExportResult;
+      assert.equal(tblFailJson.ok, false);
+      assert.ok(tblFailJson.skipped_steps.some((s) => s.location === 'database' && /custom_ledger/.test(s.reason)));
+      assert.equal(fs.existsSync(customTblOut), false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
+
 
