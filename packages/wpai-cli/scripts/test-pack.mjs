@@ -163,14 +163,20 @@ try {
   const initOutDir = path.join(spoofCwdDir, 'out-site');
   const spoofInitOut = runWpai(['init', 'small-business', '--dir', initOutDir, '--json'], { cwd: spoofCwdDir });
   const spoofInitJson = JSON.parse(spoofInitOut);
-  assert.equal(spoofInitJson.source, 'bundled-assets');
+  assert.equal(spoofInitJson.source, 'built-in');
+  assert.equal(spoofInitJson.asset_source, 'bundled-assets');
   assert.ok(!fs.existsSync(path.join(initOutDir, 'spoofed-payload.txt')));
+  const initReadme = fs.readFileSync(path.join(initOutDir, 'README.md'), 'utf8');
+  assert.match(initReadme, /npm start/);
+  assert.match(initReadme, /wpai verify \./);
+  assert.doesNotMatch(initReadme, /blueprints\/small-business\//);
 
   // 6. Every preset scaffolds from the bundled canonical blueprints/ (no inline drift)
   for (const preset of ['small-business', 'commerce', 'publishing', 'nonprofit', 'course', 'migration']) {
     const presetOut = path.join(spoofCwdDir, `init-${preset}`);
     const initJson = JSON.parse(runWpai(['init', preset, '--dir', presetOut, '--json'], { cwd: spoofCwdDir }));
-    assert.equal(initJson.source, 'bundled-assets', `${preset} source`);
+    assert.equal(initJson.source, 'built-in', `${preset} source`);
+    assert.equal(initJson.asset_source, 'bundled-assets', `${preset} asset_source`);
     for (const file of ['blueprint.json', 'verify.json']) {
       assert.deepEqual(
         JSON.parse(fs.readFileSync(path.join(presetOut, file), 'utf8')),

@@ -26,7 +26,10 @@ export interface InitOptions {
 export interface InitResult {
   preset: PresetName;
   dir: string;
-  source: 'bundled-assets' | 'repo-blueprints';
+  /** Backwards-compatible origin (`'built-in'` when loaded from bundled package assets, `'repo-blueprints'` otherwise). */
+  source: 'built-in' | 'repo-blueprints';
+  /** Exact asset directory provenance (`'bundled-assets'` or `'repo-blueprints'`). */
+  asset_source: 'bundled-assets' | 'repo-blueprints';
   name: string;
   files_written: string[];
 }
@@ -37,6 +40,40 @@ export function isValidPreset(value: string): value is PresetName {
 
 function readJson<T>(file: string): T {
   return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
+}
+
+function extractConfiguredBlogname(blueprint: Blueprint): string | undefined {
+  let blogname: string | undefined;
+  if (
+    blueprint.siteOptions &&
+    typeof blueprint.siteOptions === 'object' &&
+    typeof blueprint.siteOptions.blogname === 'string' &&
+    blueprint.siteOptions.blogname.trim()
+  ) {
+    blogname = blueprint.siteOptions.blogname;
+  }
+  if (Array.isArray(blueprint.steps)) {
+    for (const step of blueprint.steps) {
+      if (
+        step &&
+        step.step === 'setSiteOptions' &&
+        step.options &&
+        typeof step.options === 'object' &&
+        !Array.isArray(step.options)
+      ) {
+        const candidate = (step.options as Record<string, unknown>).blogname;
+        if (typeof candidate === 'string' && candidate.trim()) {
+          blogname = candidate;
+        }
+      }
+    }
+  }
+  return blogname;
+}
+
+export function deriveFallbackVerifySpec(blueprint: Blueprint): VerifySpec {
+  const configuredBlogname = extractConfiguredBlogname(blueprint);
+  return configuredBlogname ? { expected_blogname: configuredBlogname } : {};
 }
 
 /**
@@ -55,9 +92,13 @@ export function loadPreset(preset: PresetName): PresetTemplate {
   const blueprint = readJson<Blueprint>(path.join(dir, 'blueprint.json'));
   const verifyPath = path.join(dir, 'verify.json');
   const verifyFromFile = fs.existsSync(verifyPath) ? readJson<VerifySpec>(verifyPath) : null;
-  const metaTitle = blueprint.meta && typeof blueprint.meta.title === 'string' ? blueprint.meta.title : undefined;
-  const defaultName = verifyFromFile?.expected_blogname ?? metaTitle ?? preset;
-  const verify: VerifySpec = verifyFromFile ?? { expected_blogname: defaultName };
+  const configuredBlogname = extractConfiguredBlogname(blueprint);
+  const metaTitle =
+    blueprint.meta && typeof blueprint.meta.title === 'string' && blueprint.meta.title.trim()
+      ? blueprint.meta.title
+      : undefined;
+  const defaultName = verifyFromFile?.expected_blogname ?? configuredBlogname ?? metaTitle ?? preset;
+  const verify: VerifySpec = verifyFromFile ?? deriveFallbackVerifySpec(blueprint);
   const readmePath = path.join(dir, 'README.md');
   const readme = fs.existsSync(readmePath)
     ? fs.readFileSync(readmePath, 'utf8')
@@ -72,9 +113,15 @@ export function getBuiltInPreset(preset: PresetName): PresetTemplate {
   return loadPreset(preset);
 }
 
-function copyDirRecursive(srcDir: string, destDir: string, written: string[]): void {
+function copyDirRecursive(
+  srcDir: string,
+  destDir: string,
+  written: string[],
+  skipNames?: ReadonlySet<string>
+): void {
   fs.mkdirSync(destDir, { recursive: true });
   for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    if (skipNames?.has(entry.name)) continue;
     const srcPath = path.join(srcDir, entry.name);
     const destPath = path.join(destDir, entry.name);
     if (entry.isDirectory()) {
@@ -84,6 +131,22 @@ function copyDirRecursive(srcDir: string, destDir: string, written: string[]): v
       written.push(destPath);
     }
   }
+}
+
+function formatScaffoldReadme(template: PresetTemplate, customName?: string): string {
+  let text = template.readme.replaceAll(`blueprints/${template.preset}/`, './');
+  if (customName) {
+    text = text.replaceAll(template.defaultName, customName);
+  }
+  if (!/\bnpm (?:run )?start\b/.test(text) || !/\bwpai verify \./.test(text)) {
+    const quickStart = `## Quick Start\n\n\`\`\`bash\nnpm start\nwpai verify .\nwpai export . --out ./dist-wp\n\`\`\`\n\n`;
+    if (text.includes('## Usage')) {
+      text = text.replace('## Usage', `${quickStart}## Usage`);
+    } else {
+      text = `${text.trimEnd()}\n\n${quickStart}`;
+    }
+  }
+  return text;
 }
 
 function applyBlueprintCustomizations(
@@ -147,8 +210,11 @@ export function initProject(options: InitOptions): InitResult {
   const targetDir = path.resolve(options.dir);
   fs.mkdirSync(targetDir, { recursive: true });
 
+  const readmePath = path.join(targetDir, 'README.md');
+  const hadExistingReadme = fs.existsSync(readmePath);
+
   const written: string[] = [];
-  copyDirRecursive(template.dir, targetDir, written);
+  copyDirRecursive(template.dir, targetDir, written, new Set(['README.md']));
 
   const bpPath = path.join(targetDir, 'blueprint.json');
   const blueprint = structuredClone(template.blueprint);
@@ -185,18 +251,17 @@ export function initProject(options: InitOptions): InitResult {
   fs.writeFileSync(pkgPath, `${JSON.stringify(pkgJson, null, 2)}\n`, 'utf8');
   if (!written.includes(pkgPath)) written.push(pkgPath);
 
-  // Write README.md if the preset directory did not provide one
-  const readmePath = path.join(targetDir, 'README.md');
-  if (!fs.existsSync(readmePath)) {
-    const readmeText = options.name ? template.readme.replace(template.defaultName, options.name) : template.readme;
-    fs.writeFileSync(readmePath, readmeText, 'utf8');
+  // Preserve any pre-existing README.md; otherwise write scaffold-relative instructions
+  if (!hadExistingReadme) {
+    fs.writeFileSync(readmePath, formatScaffoldReadme(template, options.name), 'utf8');
     written.push(readmePath);
   }
 
   return {
     preset: options.preset,
     dir: targetDir,
-    source: template.source,
+    source: template.source === 'bundled-assets' ? 'built-in' : 'repo-blueprints',
+    asset_source: template.source,
     name: siteName,
     files_written: written.map((f) => path.relative(targetDir, f) || path.basename(f)),
   };

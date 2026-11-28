@@ -6,6 +6,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  deriveFallbackVerifySpec,
   evaluateFit,
   exportForProduction,
   handleMcpRequest,
@@ -254,11 +255,49 @@ describe('wpai init (all 6 presets)', () => {
         ) as { scripts: Record<string, string> };
         assert.ok(pkgJson.scripts.start?.includes('@wp-playground/cli'));
         assert.ok(pkgJson.scripts.verify?.includes('wpai verify'));
+
+        const readme = fs.readFileSync(path.join(tmpDir, 'README.md'), 'utf8');
+        assert.match(readme, /npm start/);
+        assert.match(readme, /wpai verify \./);
+        assert.doesNotMatch(readme, new RegExp(`blueprints/${preset}/`));
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   }
+
+  it('derives fallback expected_blogname strictly from configured blogname, never meta.title or preset name', () => {
+    assert.deepEqual(
+      deriveFallbackVerifySpec({ meta: { title: 'Gallery Title Only' }, steps: [] }),
+      {}
+    );
+    assert.deepEqual(
+      deriveFallbackVerifySpec({ siteOptions: { blogname: 'Top Level Name' } }),
+      { expected_blogname: 'Top Level Name' }
+    );
+    assert.deepEqual(
+      deriveFallbackVerifySpec({
+        meta: { title: 'Gallery Title' },
+        steps: [{ step: 'setSiteOptions', options: { blogname: 'Step Name' } }],
+      }),
+      { expected_blogname: 'Step Name' }
+    );
+  });
+
+  it('preserves an existing destination README.md when scaffolding', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-keep-readme-'));
+    try {
+      const existing = '# My Existing Project\n\nCustom notes that must not be overwritten.\n';
+      fs.writeFileSync(path.join(tmpDir, 'README.md'), existing, 'utf8');
+      const res = initProject({ preset: 'small-business', dir: tmpDir, name: 'Corner Bakery' });
+      assert.equal(fs.readFileSync(path.join(tmpDir, 'README.md'), 'utf8'), existing);
+      assert.ok(!res.files_written.includes('README.md'));
+      assert.equal(res.source, 'built-in');
+      assert.equal(res.asset_source, 'bundled-assets');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 
   it('works from an arbitrary directory outside the repository via CLI', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-outside-'));
@@ -268,10 +307,18 @@ describe('wpai init (all 6 presets)', () => {
         { cwd: os.tmpdir() }
       );
       assert.equal(res.code, 0, res.stderr);
-      const parsed = JSON.parse(res.stdout) as { ok: boolean; preset: string; name: string };
+      const parsed = JSON.parse(res.stdout) as {
+        ok: boolean;
+        preset: string;
+        name: string;
+        source: string;
+        asset_source: string;
+      };
       assert.equal(parsed.ok, true);
       assert.equal(parsed.preset, 'small-business');
       assert.equal(parsed.name, 'Corner Bakery');
+      assert.equal(parsed.source, 'built-in');
+      assert.equal(parsed.asset_source, 'bundled-assets');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -614,7 +661,7 @@ describe('wpai export (production handoff bridge)', () => {
     }
   });
 
-  it('T4: validates plugin/theme slugs, option names, and leading-dash values; normalizes activatePlugin paths', () => {
+  it('T4: validates plugin/theme slugs, option names, and leading-dash values; preserves exact activatePlugin file identifiers', () => {
     const srcDir = tmp('wpai-exp-src-');
     const outDir = tmp('wpai-exp-out-');
     try {
@@ -626,12 +673,21 @@ describe('wpai export (production handoff bridge)', () => {
           { step: 'installTheme', themeData: { resource: 'wordpress.org/themes', slug: '--force' } },
           { step: 'activateTheme', themeFolderName: '../../etc' },
           { step: 'activatePlugin', pluginPath: '/wordpress/wp-content/plugins/hello-dolly/hello.php' },
+          { step: 'activatePlugin', pluginPath: 'custom/addon.php' },
+          { step: 'activatePlugin', pluginPath: 'hello.php' },
+          { step: 'activatePlugin', pluginPath: 'akismet' },
           { step: 'activatePlugin', pluginPath: '/etc/passwd' },
         ],
       });
       const res = exportForProduction({ target: srcDir, outDir });
       assert.equal(res.ok, false);
-      assert.deepEqual(res.wp_cli_commands, [`wp plugin install 'jetpack' --activate`, `wp plugin activate 'hello-dolly'`]);
+      assert.deepEqual(res.wp_cli_commands, [
+        `wp plugin install 'jetpack' --activate`,
+        `wp plugin activate 'hello-dolly/hello.php'`,
+        `wp plugin activate 'custom/addon.php'`,
+        `wp plugin activate 'hello.php'`,
+        `wp plugin activate 'akismet'`,
+      ]);
       const blocking = res.skipped_steps.filter((s) => s.blocking).map((s) => s.location);
       assert.deepEqual(blocking, [
         'siteOptions',
@@ -641,7 +697,7 @@ describe('wpai export (production handoff bridge)', () => {
         'steps[0]',
         'steps[1]',
         'steps[2]',
-        'steps[4]',
+        'steps[7]',
       ]);
     } finally {
       fs.rmSync(srcDir, { recursive: true, force: true });
@@ -649,7 +705,7 @@ describe('wpai export (production handoff bridge)', () => {
     }
   });
 
-  it('T3/T5: never follows symlinks or copies sensitive files from wp-content/', () => {
+  it('T3/T5: never follows symlinks, excludes *.env* / *.sqlite* variants, and cleans reused outDir', () => {
     const srcDir = tmp('wpai-exp-src-');
     const secretDir = tmp('wpai-exp-secret-');
     const outDir = tmp('wpai-exp-out-');
@@ -658,6 +714,8 @@ describe('wpai export (production handoff bridge)', () => {
         steps: [
           { step: 'setSiteOptions', options: { blogname: 'Linked' } },
           { step: 'writeFile', path: '/wordpress/wp-content/uploads/.htaccess', data: 'Allow from all' },
+          { step: 'writeFile', path: '/wordpress/wp-content/uploads/shop.env.production', data: 'API_KEY=1' },
+          { step: 'writeFile', path: '/wordpress/wp-content/uploads/backup.sqlite.gz', data: 'DB' },
           { step: 'writeFile', path: '/wordpress/wp-content/./mu-plugins//ok.php', data: '<?php' },
         ],
       });
@@ -667,7 +725,11 @@ describe('wpai export (production handoff bridge)', () => {
       fs.writeFileSync(path.join(wpContent, 'themes', 'mine', 'style.css'), '/* Theme Name: Mine */');
       fs.writeFileSync(path.join(wpContent, 'wp-config-local.php'), '<?php define("DB_PASSWORD","x");');
       fs.writeFileSync(path.join(wpContent, '.env'), 'SECRET=1');
+      fs.writeFileSync(path.join(wpContent, '.env-production'), 'SECRET=2');
+      fs.writeFileSync(path.join(wpContent, 'shop.env.production'), 'SECRET=3');
       fs.writeFileSync(path.join(wpContent, 'backup.sql'), 'INSERT');
+      fs.writeFileSync(path.join(wpContent, 'backup.sqlite.gz'), 'SQLITE_GZ');
+      fs.writeFileSync(path.join(wpContent, 'database.sqlite.bak'), 'SQLITE_BAK');
       fs.writeFileSync(path.join(wpContent, 'debug.log'), 'trace');
       fs.symlinkSync(secretDir, path.join(wpContent, 'plugins'));
       fs.symlinkSync(path.join(secretDir, 'id_rsa'), path.join(wpContent, 'themes', 'mine', 'key.txt'));
@@ -675,6 +737,10 @@ describe('wpai export (production handoff bridge)', () => {
       const strict = exportForProduction({ target: srcDir, outDir: path.join(outDir, 'strict') });
       assert.equal(strict.ok, false, 'symlinks are blocking so nothing is silently missing');
       assert.equal(fs.existsSync(path.join(outDir, 'strict')), false);
+
+      // Pre-populate outDir with a stale excluded file to ensure reused outDir cannot retain it
+      fs.mkdirSync(path.join(outDir, 'wp-content'), { recursive: true });
+      fs.writeFileSync(path.join(outDir, 'wp-content', 'stale.env.production'), 'LEAK=1');
 
       const res = exportForProduction({ target: srcDir, outDir, allowPartial: true });
       assert.deepEqual(res.wp_content_files, [
@@ -685,12 +751,26 @@ describe('wpai export (production handoff bridge)', () => {
       assert.equal(byLocation.get('wp-content/plugins')?.blocking, true);
       assert.equal(byLocation.get('wp-content/themes/mine/key.txt')?.blocking, true);
       assert.equal(byLocation.get('steps[1]')?.blocking, true, '.htaccess writeFile is refused');
-      for (const f of ['wp-config-local.php', '.env', 'backup.sql', 'debug.log']) {
+      assert.equal(byLocation.get('steps[2]')?.blocking, true, 'shop.env.production writeFile is refused');
+      assert.equal(byLocation.get('steps[3]')?.blocking, true, 'backup.sqlite.gz writeFile is refused');
+      for (const f of [
+        'wp-config-local.php',
+        '.env',
+        '.env-production',
+        'shop.env.production',
+        'backup.sql',
+        'backup.sqlite.gz',
+        'database.sqlite.bak',
+        'debug.log',
+      ]) {
         assert.equal(byLocation.get(`wp-content/${f}`)?.blocking, false, `${f} excluded without blocking`);
       }
       assert.equal(fs.existsSync(path.join(outDir, 'wp-content', 'plugins')), false);
       const bundled = fs.readdirSync(outDir, { recursive: true }).map(String);
-      assert.ok(!bundled.some((f) => /id_rsa|key\.txt|wp-config|\.env|\.sql|debug\.log|\.htaccess/.test(f)), bundled.join(','));
+      assert.ok(
+        !bundled.some((f) => /id_rsa|key\.txt|wp-config|\.env|\.sql|\.sqlite|debug\.log|\.htaccess|stale/.test(f)),
+        bundled.join(',')
+      );
     } finally {
       fs.rmSync(srcDir, { recursive: true, force: true });
       fs.rmSync(secretDir, { recursive: true, force: true });
@@ -836,6 +916,52 @@ describe('wpai bundled asset resolution precedence', () => {
       assert.equal(explicitRes.code, 1);
     } finally {
       fs.rmSync(spoofDir, { recursive: true, force: true });
+    }
+  });
+
+  it('copy-assets.mjs requires all 6 preset blueprints before replacing or accepting bundled assets', () => {
+    const fakeRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-copy-assets-'));
+    try {
+      const repoRoot = path.resolve(__dirname, '../../../..');
+      const scriptSrc = path.join(repoRoot, 'packages', 'wpai-cli', 'scripts', 'copy-assets.mjs');
+      const fakePkg = path.join(fakeRepo, 'packages', 'wpai-cli');
+      const fakeScript = path.join(fakePkg, 'scripts', 'copy-assets.mjs');
+      fs.mkdirSync(path.dirname(fakeScript), { recursive: true });
+      fs.copyFileSync(scriptSrc, fakeScript);
+
+      // Valid registry & skill sources, but incomplete source blueprints (only small-business)
+      fs.mkdirSync(path.join(fakeRepo, 'registry'), { recursive: true });
+      fs.writeFileSync(path.join(fakeRepo, 'registry', 'wp-capabilities.json'), '{}');
+      fs.mkdirSync(path.join(fakeRepo, 'skills', 'wp-platform-selection'), { recursive: true });
+      fs.writeFileSync(path.join(fakeRepo, 'skills', 'wp-platform-selection', 'SKILL.md'), '# skill');
+      fs.mkdirSync(path.join(fakeRepo, 'blueprints', 'small-business'), { recursive: true });
+      fs.writeFileSync(path.join(fakeRepo, 'blueprints', 'small-business', 'blueprint.json'), '{"incomplete":true}');
+
+      // Pre-populate a complete pre-bundled assets/blueprints with a sentinel marker
+      const assetsBlueprints = path.join(fakePkg, 'assets', 'blueprints');
+      for (const preset of PRESET_NAMES) {
+        fs.mkdirSync(path.join(assetsBlueprints, preset), { recursive: true });
+        fs.writeFileSync(path.join(assetsBlueprints, preset, 'blueprint.json'), '{"sentinel":"keep"}');
+      }
+
+      const keepRes = spawnSync(process.execPath, [fakeScript], { encoding: 'utf8' });
+      assert.equal(keepRes.status, 0, keepRes.stderr);
+      assert.equal(
+        fs.readFileSync(path.join(assetsBlueprints, 'small-business', 'blueprint.json'), 'utf8'),
+        '{"sentinel":"keep"}',
+        'incomplete source must not overwrite a complete pre-bundled copy'
+      );
+
+      // Make pre-bundled copy incomplete too (remove migration/blueprint.json) -> must fail while keeping remaining files
+      fs.rmSync(path.join(assetsBlueprints, 'migration', 'blueprint.json'));
+      const failRes = spawnSync(process.execPath, [fakeScript], { encoding: 'utf8' });
+      assert.notEqual(failRes.status, 0, 'must reject when both source and pre-bundled copy are incomplete');
+      assert.equal(
+        fs.readFileSync(path.join(assetsBlueprints, 'small-business', 'blueprint.json'), 'utf8'),
+        '{"sentinel":"keep"}'
+      );
+    } finally {
+      fs.rmSync(fakeRepo, { recursive: true, force: true });
     }
   });
 });
