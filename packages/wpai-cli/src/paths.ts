@@ -150,12 +150,28 @@ export function findPlatformSelectionSkillPath(explicitPath?: string): string {
   );
 }
 
-export function findBlueprintPresetDir(preset: PresetName): string | null {
-  const rel = path.join('blueprints', preset);
-  const fromPkg = walkUpFor(__dirname, path.join(rel, 'blueprint.json'));
-  if (fromPkg) return path.dirname(fromPkg);
+export interface BlueprintPresetLocation {
+  dir: string;
+  source: 'bundled-assets' | 'repo-blueprints';
+}
+
+/**
+ * Locate a preset directory: bundled package assets first, then the dev repo relative to
+ * __dirname (never process.cwd(), see T6).
+ */
+export function resolveBlueprintPresetDir(preset: PresetName): BlueprintPresetLocation | null {
+  const rel = path.join('blueprints', preset, 'blueprint.json');
+  const fromBundled = findBundledAsset(rel);
+  if (fromBundled) return { dir: path.dirname(fromBundled), source: 'bundled-assets' };
+
+  const fromPkg = walkUpFor(__dirname, rel);
+  if (fromPkg) return { dir: path.dirname(fromPkg), source: 'repo-blueprints' };
 
   return null;
+}
+
+export function findBlueprintPresetDir(preset: PresetName): string | null {
+  return resolveBlueprintPresetDir(preset)?.dir ?? null;
 }
 
 export interface PlaygroundInvocation {

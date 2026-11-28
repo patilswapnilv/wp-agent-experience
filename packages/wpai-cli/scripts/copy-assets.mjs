@@ -19,6 +19,12 @@ const ASSETS_TO_COPY = [
     dest: path.join(assetsRoot, 'skills', 'wp-platform-selection'),
     requiredFile: 'SKILL.md',
   },
+  {
+    // Canonical `wpai init` presets; presets.ts reads these instead of inlining copies.
+    src: path.join(repoRoot, 'blueprints'),
+    dest: path.join(assetsRoot, 'blueprints'),
+    requiredFile: path.join('small-business', 'blueprint.json'),
+  },
 ];
 
 for (const item of ASSETS_TO_COPY) {

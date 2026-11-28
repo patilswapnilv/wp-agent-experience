@@ -10,6 +10,7 @@ import {
   exportForProduction,
   handleMcpRequest,
   initProject,
+  loadPreset,
   loadRegistry,
   PRESET_NAMES,
   sanitizeWpCliCommand,
@@ -189,7 +190,22 @@ describe('wpai validate (Blueprint v1 validator)', () => {
   });
 });
 
-describe('wpai init (all 3 presets)', () => {
+describe('wpai init (all 6 presets)', () => {
+  it('loads every preset directly from canonical blueprints/<preset>/ with zero drift', () => {
+    const repoRoot = path.resolve(__dirname, '../../../..');
+    for (const preset of PRESET_NAMES) {
+      const tpl = loadPreset(preset);
+      const canonicalBp = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, 'blueprints', preset, 'blueprint.json'), 'utf8')
+      );
+      const canonicalVerify = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, 'blueprints', preset, 'verify.json'), 'utf8')
+      );
+      assert.deepEqual(tpl.blueprint, canonicalBp, `${preset} blueprint must match canonical file`);
+      assert.deepEqual(tpl.verify, canonicalVerify, `${preset} verify.json must match canonical file`);
+    }
+  });
+
   for (const preset of PRESET_NAMES) {
     it(`scaffolds "${preset}" into a fresh temp directory with valid blueprint & custom options`, () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `wpai-init-${preset}-`));
