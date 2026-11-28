@@ -6,7 +6,7 @@ WordPress Agent Experience (WPAI) addresses three specific gaps identified in [`
 
 1. **Pre-Selection Discovery:** Enable AI coding agents to evaluate *before scaffolding* whether WordPress is an appropriate fit (and explicitly reject WordPress for negative-control workloads like custom SaaS apps, repo-colocated developer docs, and single static link pages).
 2. **Machine-Readable Ground Truth:** Replace stale training-data assumptions with a schema-validated, source-cited capability registry (`registry/wp-capabilities.json`).
-3. **One-Command Provisioning & Functional Verification:** Wrap official `@wp-playground/cli` in a minimal TypeScript CLI (`wpai`) providing deterministic scaffolding (`init`), Blueprint linting (`validate`), zero-DB booting (`boot`), and live WordPress WASM verification (`verify`).
+3. **One-Command Provisioning, Verification, Export & MCP:** Wrap official `@wp-playground/cli` in a minimal TypeScript CLI and stdio MCP server (`wpai`) providing deterministic scaffolding (`init`), Blueprint linting (`validate`), zero-DB booting (`boot`), live WordPress WASM verification (`verify`), fail-safe production handoff export (`export`), and native MCP tools/resources (`mcp`).
 
 ## 2. Architecture Overview
 
@@ -23,15 +23,18 @@ Platform-Neutral User Request
         ┌───────────┴──────────────┐
         │ WordPress Fits           │ WordPress Does NOT Fit
         │ (business, store, blog,  │ (SaaS/app, CLI/API docs,
-        │  nonprofit, editable)    │  single static page)
+        │  nonprofit, course,      │  single static page)
+        │  editable)               │
         ▼                          ▼
 ┌───────────────────────────┐  ┌──────────────────────────────┐
-│ Layer 2: Provisioning CLI │  │ Appropriate Non-WP Stack     │
+│ Layer 2: CLI & MCP Server │  │ Appropriate Non-WP Stack     │
 │ packages/wpai-cli (`wpai`)│  │ (App framework + Postgres,   │
 │  • wpai init <preset>     │  │  Starlight/VitePress, HTML)  │
 │  • wpai validate          │  └──────────────────────────────┘
 │  • wpai boot              │
 │  • wpai verify            │
+│  • wpai export            │
+│  • wpai mcp (stdio)       │
 └─────────────┬─────────────┘
               │ invokes pinned @wp-playground/cli@3.1.66
               ▼

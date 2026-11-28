@@ -1,0 +1,106 @@
+name: Publish wpai-cli to npm
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run npm publish --dry-run without publishing to npm'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Gate Release (Validate, Unit, Pack & Live Playground)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Verify git tag matches packages/wpai-cli/package.json version
+        if: github.ref_type == 'tag'
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          PKG_VERSION="$(node -p "require('./packages/wpai-cli/package.json').version")"
+          EXPECTED_TAG="v${PKG_VERSION}"
+          if [ "$TAG_NAME" != "$EXPECTED_TAG" ]; then
+            echo "Error: git tag '$TAG_NAME' does not match packages/wpai-cli/package.json version '$PKG_VERSION' (expected '$EXPECTED_TAG')." >&2
+            exit 1
+          fi
+          echo "Verified tag $TAG_NAME matches wpai-cli@$PKG_VERSION"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript CLI & bundled assets
+        run: npm run build
+
+      - name: Validate capability registry & all blueprints
+        run: npm run validate
+
+      - name: Run Node unit tests
+        run: npm test
+
+      - name: Smoke-test packed npm tarball outside repository
+        run: npm run test:pack
+
+      - name: Verify blueprints in live WordPress Playground
+        run: npm run test:integration
+
+  publish:
+    name: Publish wpai-cli (OIDC Trusted Publishing / NPM_TOKEN)
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # Required for npm Trusted Publishing (OIDC) and provenance attestations
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js 24 for npm registry
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24' # Includes npm >= 11.5.1 required for npm OIDC Trusted Publishing
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false # Mitigate cache-poisoning exposure of OIDC/NPM credentials
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build wpai-cli
+        run: npm run build
+
+      - name: Publish wpai-cli to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          IS_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "$IS_DRY_RUN" = "true" ]; then
+            echo "Running dry-run publish check..."
+            npm publish --workspace=packages/wpai-cli --dry-run --access public
+            exit 0
+          fi
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "Authenticating with NPM_TOKEN secret..."
+            export NODE_AUTH_TOKEN="$NPM_TOKEN"
+          else
+            echo "No NPM_TOKEN secret set; using npm Trusted Publishing (OIDC)..."
+            unset NODE_AUTH_TOKEN
+          fi
+          npm publish --workspace=packages/wpai-cli --provenance --access public

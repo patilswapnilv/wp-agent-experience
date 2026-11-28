@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Vulnerability Report
+    url: https://github.com/patilswapnilv/wp-agent-experience/blob/main/SECURITY.md
+    about: Please report security issues responsibly via SECURITY.md rather than a public issue.
+  - name: Research Report & Empirical Methodology
+    url: https://github.com/patilswapnilv/wp-agent-experience/blob/main/docs/research-report.md
+    about: Read the 63-run experimental report, statistical analysis, and threats to validity.
+  - name: Export Security Threat Model & Stage 2 RFC
+    url: https://github.com/patilswapnilv/wp-agent-experience/blob/main/docs/export-security-and-parity.md
+    about: Review the threat model (T1-T7) and Stage 2 production-parity export architecture.

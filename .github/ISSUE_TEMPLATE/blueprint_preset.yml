@@ -1,0 +1,38 @@
+name: Blueprint Preset Proposal
+description: Propose a new verified WordPress Playground Blueprint preset for wpai init
+title: "[Blueprint]: "
+labels: ["blueprint", "enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every Blueprint preset in `blueprints/` must be WordPress Playground Blueprint v1 compliant, ship a `verify.json` contract, and verify cleanly on WordPress 7.x + PHP 8.3 WASM without external credentials.
+  - type: input
+    id: preset-name
+    attributes:
+      label: Proposed preset slug
+      description: Lowercase kebab-case identifier (e.g. `portfolio`, `membership`, `directory`).
+      placeholder: "membership"
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Target use case & why WordPress fits
+      description: Describe the user request profile where WordPress is genuinely the right choice (not a negative control).
+    validations:
+      required: true
+  - type: textarea
+    id: structure
+    attributes:
+      label: Seeded pages, CPTs, roles, and plugins
+      description: List the core WordPress capabilities, pages, CPTs, or WordPress.org plugins required.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Proposed verify.json assertions
+      description: What functional checks prove the site works end-to-end? (Pages, REST routes, Abilities API, zero PHP errors)
+    validations:
+      required: true

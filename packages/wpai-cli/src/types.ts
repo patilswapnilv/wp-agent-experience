@@ -66,15 +66,18 @@ export interface ValidationResult {
 }
 
 export interface VerifySpec {
+  blueprint?: string;
   expected_blogname?: string;
   required_pages?: string[];
-  required_posts_min?: number;
+  required_posts_min?: number | Record<string, number>;
   required_post_types?: string[];
   required_categories?: string[];
   required_users_min?: number;
   required_options?: Record<string, string | number | boolean | null>;
   required_rest_routes?: string[];
   require_abilities_api?: boolean;
+  required_abilities?: string[];
+  required_mu_plugins?: string[];
 }
 
 export interface VerifyCheckResult {

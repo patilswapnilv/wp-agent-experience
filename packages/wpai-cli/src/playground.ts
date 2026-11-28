@@ -181,19 +181,51 @@ if ( $wp_loaded ) {
         $mu_plugins = array_keys( get_mu_plugins() );
     }
 
+    if ( ! empty( $spec['required_mu_plugins'] ) && is_array( $spec['required_mu_plugins'] ) ) {
+        foreach ( $spec['required_mu_plugins'] as $req_mu ) {
+            $mu_name = (string) $req_mu;
+            $has_mu = in_array( $mu_name, $mu_plugins, true );
+            $add_check(
+                "required_mu_plugin:{$mu_name}",
+                $has_mu,
+                $has_mu ? "MU-plugin '{$mu_name}' is loaded" : "Missing required MU-plugin '{$mu_name}'"
+            );
+        }
+    }
+
     // Abilities API (WordPress 6.9+)
     $abilities_api = class_exists( 'WP_Ability' );
+    $registered_ability_names = array();
     if ( $abilities_api ) {
         try {
             if ( function_exists( 'wp_get_abilities' ) ) {
                 $all_abilities = wp_get_abilities();
                 if ( is_array( $all_abilities ) ) {
                     $registered_abilities_count = count( $all_abilities );
+                    foreach ( $all_abilities as $ab_key => $ab_obj ) {
+                        if ( is_string( $ab_key ) && $ab_key !== '' ) {
+                            $registered_ability_names[ $ab_key ] = true;
+                        }
+                        if ( is_object( $ab_obj ) && method_exists( $ab_obj, 'get_name' ) ) {
+                            $registered_ability_names[ (string) $ab_obj->get_name() ] = true;
+                        }
+                    }
                 }
             } elseif ( class_exists( 'WP_Abilities_Registry' ) && method_exists( 'WP_Abilities_Registry', 'get_instance' ) ) {
                 $reg = WP_Abilities_Registry::get_instance();
                 if ( $reg && method_exists( $reg, 'get_all_registered' ) ) {
-                    $registered_abilities_count = count( $reg->get_all_registered() );
+                    $all_reg = $reg->get_all_registered();
+                    if ( is_array( $all_reg ) ) {
+                        $registered_abilities_count = count( $all_reg );
+                        foreach ( $all_reg as $ab_key => $ab_obj ) {
+                            if ( is_string( $ab_key ) && $ab_key !== '' ) {
+                                $registered_ability_names[ $ab_key ] = true;
+                            }
+                            if ( is_object( $ab_obj ) && method_exists( $ab_obj, 'get_name' ) ) {
+                                $registered_ability_names[ (string) $ab_obj->get_name() ] = true;
+                            }
+                        }
+                    }
                 }
             }
         } catch ( \\Throwable $e ) {
@@ -209,6 +241,21 @@ if ( $wp_loaded ) {
                 ? "WP_Ability available ({$registered_abilities_count} registered abilities)"
                 : 'WP_Ability class not found (requires WordPress 6.9+)'
         );
+    }
+
+    if ( ! empty( $spec['required_abilities'] ) && is_array( $spec['required_abilities'] ) ) {
+        foreach ( $spec['required_abilities'] as $req_ab ) {
+            $ab_name = (string) $req_ab;
+            $has_ab = $abilities_api && (
+                isset( $registered_ability_names[ $ab_name ] ) ||
+                ( function_exists( 'wp_has_ability' ) && wp_has_ability( $ab_name ) )
+            );
+            $add_check(
+                "required_ability:{$ab_name}",
+                $has_ab,
+                $has_ab ? "Ability '{$ab_name}' is registered" : "Missing required ability '{$ab_name}'"
+            );
+        }
     }
 
     // Content counts
@@ -267,15 +314,38 @@ if ( $wp_loaded ) {
         }
     }
 
-    // required_posts_min
-    if ( isset( $spec['required_posts_min'] ) && is_numeric( $spec['required_posts_min'] ) ) {
-        $min = (int) $spec['required_posts_min'];
-        $ok_posts = $counts['posts'] >= $min;
-        $add_check(
-            'required_posts_min',
-            $ok_posts,
-            "Published posts: {$counts['posts']} (minimum required: {$min})"
-        );
+    // required_posts_min (numeric post count or post_type => min map)
+    if ( isset( $spec['required_posts_min'] ) ) {
+        if ( is_numeric( $spec['required_posts_min'] ) ) {
+            $min = (int) $spec['required_posts_min'];
+            $ok_posts = $counts['posts'] >= $min;
+            $add_check(
+                'required_posts_min',
+                $ok_posts,
+                "Published posts: {$counts['posts']} (minimum required: {$min})"
+            );
+        } elseif ( is_array( $spec['required_posts_min'] ) ) {
+            foreach ( $spec['required_posts_min'] as $pt_key => $pt_min ) {
+                if ( ! is_string( $pt_key ) || ! is_numeric( $pt_min ) ) {
+                    continue;
+                }
+                $min_pt = (int) $pt_min;
+                if ( isset( $counts['post_types'][ $pt_key ] ) ) {
+                    $actual_pt = (int) $counts['post_types'][ $pt_key ];
+                } elseif ( post_type_exists( $pt_key ) ) {
+                    $c_pt = wp_count_posts( $pt_key );
+                    $actual_pt = isset( $c_pt->publish ) ? (int) $c_pt->publish : 0;
+                } else {
+                    $actual_pt = 0;
+                }
+                $ok_pt = $actual_pt >= $min_pt;
+                $add_check(
+                    "required_posts_min:{$pt_key}",
+                    $ok_pt,
+                    "Published '{$pt_key}': {$actual_pt} (minimum required: {$min_pt})"
+                );
+            }
+        }
     }
 
     // required_post_types
