@@ -314,7 +314,7 @@ if ( $wp_loaded ) {
         }
     }
 
-    // required_posts_min (numeric post count or post_type => min map)
+    // required_posts_min (numeric post count or post_type => min map; fails closed on invalid shapes)
     if ( isset( $spec['required_posts_min'] ) ) {
         if ( is_numeric( $spec['required_posts_min'] ) ) {
             $min = (int) $spec['required_posts_min'];
@@ -325,8 +325,21 @@ if ( $wp_loaded ) {
                 "Published posts: {$counts['posts']} (minimum required: {$min})"
             );
         } elseif ( is_array( $spec['required_posts_min'] ) ) {
+            if ( empty( $spec['required_posts_min'] ) ) {
+                $add_check(
+                    'required_posts_min',
+                    false,
+                    'Invalid required_posts_min: post-type minimum map must not be empty'
+                );
+            }
             foreach ( $spec['required_posts_min'] as $pt_key => $pt_min ) {
-                if ( ! is_string( $pt_key ) || ! is_numeric( $pt_min ) ) {
+                if ( ! is_string( $pt_key ) || $pt_key === '' || ! is_numeric( $pt_min ) ) {
+                    $label = is_string( $pt_key ) && $pt_key !== '' ? $pt_key : (string) $pt_key;
+                    $add_check(
+                        "required_posts_min:{$label}",
+                        false,
+                        "Invalid required_posts_min entry for '{$label}' (expected post_type => numeric minimum)"
+                    );
                     continue;
                 }
                 $min_pt = (int) $pt_min;
@@ -345,6 +358,12 @@ if ( $wp_loaded ) {
                     "Published '{$pt_key}': {$actual_pt} (minimum required: {$min_pt})"
                 );
             }
+        } else {
+            $add_check(
+                'required_posts_min',
+                false,
+                'Invalid required_posts_min value (expected number or post_type => count object)'
+            );
         }
     }
 
