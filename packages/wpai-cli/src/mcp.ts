@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
-import { exportForProduction } from './export.js';
+import { exportProjectForProduction } from './export.js';
 import { findPlatformSelectionSkillPath, getPackageVersion } from './paths.js';
 import { verifyBlueprint } from './playground.js';
 import { initProject, isValidPreset } from './presets.js';
 import { evaluateFit, loadRegistry } from './registry.js';
-import { PRESET_NAMES } from './types.js';
+import { type ExportMode, PRESET_NAMES } from './types.js';
 import { validateBlueprintFile } from './validator.js';
 
 const SERVER_NAME = 'wpai';
@@ -124,7 +124,7 @@ const MCP_TOOLS = [
   {
     name: 'wpai_export',
     description:
-      'Export a WordPress Playground project into a deployable bundle (wp-content/, WP-CLI setup.sh, and DEPLOY.md checklist). Fails with ok: false and writes nothing when Blueprint steps cannot be translated, unless allow_partial is true; skipped_steps lists them.',
+      'Export a WordPress Playground project into a deployable MySQL/MariaDB bundle (wp-content/, content.wxr + wpai-state.json when materialized, WP-CLI setup.sh, MANIFEST.sha256, and DEPLOY.md). Automatically materializes runPHP/importWxr steps inside isolated WordPress Playground without replaying PHP on production; fails safe (isError: true) on host-level untranslatable steps unless allow_partial is true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -136,10 +136,20 @@ const MCP_TOOLS = [
           type: 'string',
           description: 'Output directory for the production export bundle.',
         },
+        mode: {
+          type: 'string',
+          enum: ['auto', 'materialized', 'static'],
+          description:
+            'Export mode: "auto" (default) materializes via Playground when runPHP/importWxr steps exist; "materialized" always boots Playground; "static" runs offline Stage 1 translation only.',
+        },
         allow_partial: {
           type: 'boolean',
           description:
-            'Write the bundle even when some Blueprint steps (e.g. runPHP) cannot be translated. The result is marked complete: false and DEPLOY.md lists the manual steps. Defaults to false, which fails without writing files.',
+            'Write the bundle even when some Blueprint operations cannot be translated. The result is marked complete: false and DEPLOY.md lists the manual steps. Defaults to false, which fails without writing files.',
+        },
+        timeout_ms: {
+          type: 'number',
+          description: 'Playground materialization timeout in milliseconds (default 90000).',
         },
       },
       required: ['target', 'out_dir'],
@@ -248,7 +258,18 @@ async function handleToolCall(
         if (!target || !outDir) {
           throw new Error('Missing required string arguments "target" and "out_dir".');
         }
-        const exportResult = exportForProduction({ target, outDir, allowPartial: args.allow_partial === true });
+        const rawMode = typeof args.mode === 'string' ? args.mode : 'auto';
+        if (rawMode !== 'auto' && rawMode !== 'materialized' && rawMode !== 'static') {
+          throw new Error(`Invalid mode "${rawMode}". Expected one of: auto, materialized, static.`);
+        }
+        const timeoutMs = typeof args.timeout_ms === 'number' ? args.timeout_ms : 90000;
+        const exportResult = await exportProjectForProduction({
+          target,
+          outDir,
+          allowPartial: args.allow_partial === true,
+          mode: rawMode as ExportMode,
+          timeoutMs,
+        });
         if (!exportResult.ok) {
           return {
             content: [{ type: 'text', text: JSON.stringify(exportResult, null, 2) }],

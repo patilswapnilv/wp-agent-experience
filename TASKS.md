@@ -29,3 +29,5 @@
 
 - [x] **T2.1** Complete Deliverable 11: Verified release candidate (`v0.1.0-rc.1`), full test suite pass (`npm run build`, `npm run validate`, `npm test`, `npm run test:integration`, Python harness tests, `analyze.py`), clean packaging audit (`RELEASE.md`)
 - [x] **T2.2** Final sponsor summary report with repository links, evidence table, and approval requests for any external/upstream actions
+- [x] **T2.3** Complete Stage 2 Materialized Export (`#2`: `content.wxr` + `wpai-state.json` + `MANIFEST.sha256` + `T5` token scanner) and Gate 3 MariaDB 10.11 + WordPress 7.1.5 Production Parity & Idempotency CI (`verify-probe.php`, `wpai verify-target`, `scripts/test-production-parity.mjs`, `.github/workflows/ci.yml`)
+

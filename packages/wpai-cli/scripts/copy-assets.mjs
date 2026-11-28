@@ -63,3 +63,19 @@ for (const item of ASSETS_TO_COPY) {
     );
   }
 }
+
+const phpSrcDir = path.join(pkgRoot, 'src', 'php');
+const phpDestDir = path.join(assetsRoot, 'php');
+if (fs.existsSync(path.join(phpSrcDir, 'verify-probe.php'))) {
+  fs.mkdirSync(path.dirname(phpDestDir), { recursive: true });
+  const stagePhp = `${phpDestDir}.tmp-${process.pid}`;
+  fs.rmSync(stagePhp, { recursive: true, force: true });
+  try {
+    fs.cpSync(phpSrcDir, stagePhp, { recursive: true });
+    fs.rmSync(phpDestDir, { recursive: true, force: true });
+    fs.renameSync(stagePhp, phpDestDir);
+  } finally {
+    fs.rmSync(stagePhp, { recursive: true, force: true });
+  }
+}
+
