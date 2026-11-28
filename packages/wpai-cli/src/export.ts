@@ -85,10 +85,9 @@ const BLOCKED_GLOBAL_FLAGS = new Set(['exec', 'require', 'ssh', 'http', 'path', 
 /** Files that must never be shipped in a deployable bundle (T5), matched against the basename. */
 const SENSITIVE_FILE_PATTERNS: RegExp[] = [
   /^wp-config.*\.php$/i,
-  /^\.env(\..*)?$/i,
-  /\.env$/i,
+  /\.env([._-]|$)/i,
   /\.sql(\.(gz|bz2|xz|zip))?$/i,
-  /\.sqlite3?(-(journal|wal|shm))?$/i,
+  /\.sqlite/i,
   /^debug\.log$/i,
   /\.(pem|key|p12|pfx)$/i,
   /^id_(rsa|dsa|ecdsa|ed25519)/i,
@@ -99,6 +98,20 @@ const SENSITIVE_FILE_PATTERNS: RegExp[] = [
 
 export function isSensitiveFileName(name: string): boolean {
   return SENSITIVE_FILE_PATTERNS.some((re) => re.test(name));
+}
+
+const PLUGIN_PHP_FILE_RE = /^[a-z0-9][a-z0-9_.-]*\.php$/i;
+
+/**
+ * Valid WordPress plugin activation identifier: either a directory slug (`jetpack`),
+ * a `<slug>/<file>.php` plugin basename (`custom/addon.php`), or a root `<file>.php` (`hello.php`).
+ */
+export function isValidPluginIdentifier(id: string): boolean {
+  if (!id || id.includes('..')) return false;
+  if (SLUG_RE.test(id)) return true;
+  if (PLUGIN_PHP_FILE_RE.test(id)) return true;
+  const parts = id.split('/');
+  return parts.length === 2 && SLUG_RE.test(parts[0]!) && PLUGIN_PHP_FILE_RE.test(parts[1]!);
 }
 
 function shellEscapeSingle(value: string): string {
@@ -117,6 +130,11 @@ interface WpCliRule {
 const checkSlugs: PositionalCheck = (args) => {
   const bad = args.find((a) => !SLUG_RE.test(a));
   return bad === undefined ? null : `"${bad}" is not a WordPress.org slug (${SLUG_RE.source}).`;
+};
+
+const checkPluginIds: PositionalCheck = (args) => {
+  const bad = args.find((a) => !isValidPluginIdentifier(a));
+  return bad === undefined ? null : `"${bad}" is not a valid WordPress plugin slug or plugin file identifier.`;
 };
 
 const checkOptionKeys = (count: number): PositionalCheck => (args) => {
@@ -157,8 +175,8 @@ const WP_CLI_ALLOWLIST: Record<string, WpCliRule> = {
   'option add': { min: 2, max: 2, flags: ['format', 'autoload'], check: checkOptionKeys(1) },
   'option delete': { min: 1, max: 20, flags: [], check: checkOptionKeys(20) },
   'plugin install': { min: 1, max: 20, flags: ['activate', 'version', 'force'], check: checkSlugs },
-  'plugin activate': { min: 1, max: 20, flags: [], check: checkSlugs },
-  'plugin deactivate': { min: 1, max: 20, flags: [], check: checkSlugs },
+  'plugin activate': { min: 1, max: 20, flags: [], check: checkPluginIds },
+  'plugin deactivate': { min: 1, max: 20, flags: [], check: checkPluginIds },
   'theme install': { min: 1, max: 20, flags: ['activate', 'version', 'force'], check: checkSlugs },
   'theme activate': { min: 1, max: 1, flags: [], check: checkSlugs },
   'rewrite structure': { min: 1, max: 1, flags: ['category-base', 'tag-base', 'hard'] },
@@ -635,14 +653,13 @@ export function exportForProduction(options: ExportOptions): ExportResult {
       }
 
       case 'activatePlugin': {
-        // Normalize `/wordpress/wp-content/plugins/<slug>/<file>.php`, `<slug>/<file>.php`, or `<slug>` (T4).
+        // Normalize `/wordpress/wp-content/plugins/<slug>/<file>.php`, `<slug>/<file>.php`, `<file>.php`, or `<slug>` (T4).
         const raw = typeof step.pluginPath === 'string' ? step.pluginPath.trim() : '';
-        const rel = raw.replace(/^\/wordpress\/wp-content\/plugins\//, '');
-        const slug = rel.split('/')[0] ?? '';
-        if (slug && SLUG_RE.test(slug) && !rel.startsWith('/')) {
-          wpCliCommands.push(`wp plugin activate ${shellEscapeSingle(slug)}`);
+        const pluginId = raw.replace(/^\/wordpress\/wp-content\/plugins\/+/, '').replace(/\/+$/, '');
+        if (isValidPluginIdentifier(pluginId) && !raw.startsWith('/wordpress/wp-content/plugins//')) {
+          wpCliCommands.push(`wp plugin activate ${shellEscapeSingle(pluginId)}`);
         } else {
-          skip(location, name, `Plugin path "${raw || '(none)'}" does not resolve to a valid plugin slug; activate it manually.`);
+          skip(location, name, `Plugin path "${raw || '(none)'}" does not resolve to a valid plugin identifier; activate it manually.`);
         }
         break;
       }
@@ -715,67 +732,74 @@ export function exportForProduction(options: ExportOptions): ExportResult {
     };
   }
 
-  fs.mkdirSync(outDir, { recursive: true });
+  if (outDir === path.parse(outDir).root || outDir === baseDir || isInside(outDir, baseDir)) {
+    throw new Error(`Export output directory (${outDir}) must be distinct from the source project directory (${baseDir}).`);
+  }
+
+  fs.mkdirSync(path.dirname(outDir), { recursive: true });
+  const stageDir = fs.mkdtempSync(path.join(path.dirname(outDir), `.wpai-export-${path.basename(outDir)}-`));
+  const stageWpContent = path.join(stageDir, 'wp-content');
   const wpContentFiles: string[] = [];
   const filesWritten: string[] = [];
 
-  // 6. Copy planned wp-content/ files, then recreate directories and inline writeFile contents
-  for (const rel of filesToCopy) {
-    const dst = path.join(wpContentOut, ...rel.split('/'));
-    fs.mkdirSync(path.dirname(dst), { recursive: true });
-    fs.copyFileSync(path.join(localWpContent, ...rel.split('/')), dst);
-    wpContentFiles.push(path.relative(outDir, dst));
-  }
-  for (const relInside of pendingDirs) {
-    fs.mkdirSync(path.join(wpContentOut, relInside), { recursive: true });
-  }
-  for (const { rel: relInside, content } of pendingWrites) {
-    const targetFile = path.join(wpContentOut, relInside);
-    fs.mkdirSync(path.dirname(targetFile), { recursive: true });
-    fs.writeFileSync(targetFile, content, 'utf8');
-    const rel = path.relative(outDir, targetFile);
-    if (!wpContentFiles.includes(rel)) {
-      wpContentFiles.push(rel);
+  try {
+    // 6. Build the bundle in a clean staging directory so stale/excluded files never remain in a reused outDir
+    for (const rel of filesToCopy) {
+      const dst = path.join(stageWpContent, ...rel.split('/'));
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(path.join(localWpContent, ...rel.split('/')), dst);
+      wpContentFiles.push(path.relative(stageDir, dst));
     }
-  }
+    for (const relInside of pendingDirs) {
+      fs.mkdirSync(path.join(stageWpContent, relInside), { recursive: true });
+    }
+    for (const { rel: relInside, content } of pendingWrites) {
+      const targetFile = path.join(stageWpContent, relInside);
+      fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+      fs.writeFileSync(targetFile, content, 'utf8');
+      const rel = path.relative(stageDir, targetFile);
+      if (!wpContentFiles.includes(rel)) {
+        wpContentFiles.push(rel);
+      }
+    }
 
-  // 7. Copy blueprint.json for reference
-  const bpOut = path.join(outDir, 'blueprint.json');
-  fs.copyFileSync(blueprintPath, bpOut);
-  filesWritten.push('blueprint.json');
+    // 7. Copy blueprint.json for reference
+    const bpOut = path.join(stageDir, 'blueprint.json');
+    fs.copyFileSync(blueprintPath, bpOut);
+    filesWritten.push('blueprint.json');
 
-  // 8. Write executable setup.sh WP-CLI handoff script (guarded by --dry-run / --yes, T7)
-  const setupShPath = path.join(outDir, 'setup.sh');
-  fs.writeFileSync(setupShPath, buildSetupScript(wpCliCommands, complete, blocking.length), 'utf8');
-  fs.chmodSync(setupShPath, 0o755);
-  filesWritten.push('setup.sh');
+    // 8. Write executable setup.sh WP-CLI handoff script (guarded by --dry-run / --yes, T7)
+    const setupShPath = path.join(stageDir, 'setup.sh');
+    fs.writeFileSync(setupShPath, buildSetupScript(wpCliCommands, complete, blocking.length), 'utf8');
+    fs.chmodSync(setupShPath, 0o755);
+    filesWritten.push('setup.sh');
 
-  // 9. Write DEPLOY.md production handoff checklist
-  const deployMdPath = path.join(outDir, 'DEPLOY.md');
-  const siteTitle =
-    (bp.meta && typeof bp.meta.title === 'string' && bp.meta.title) ||
-    (bp.siteOptions && typeof bp.siteOptions.blogname === 'string' && bp.siteOptions.blogname) ||
-    'WordPress Site';
-  const describeSkipped = (s: SkippedStep): string => `- \`${s.location}\` (\`${s.step}\`): ${s.reason}`;
-  const nonBlocking = skippedSteps.filter((s) => !s.blocking);
-  const manualSection = complete
-    ? ''
-    : `
+    // 9. Write DEPLOY.md production handoff checklist
+    const deployMdPath = path.join(stageDir, 'DEPLOY.md');
+    const siteTitle =
+      (bp.meta && typeof bp.meta.title === 'string' && bp.meta.title) ||
+      (bp.siteOptions && typeof bp.siteOptions.blogname === 'string' && bp.siteOptions.blogname) ||
+      'WordPress Site';
+    const describeSkipped = (s: SkippedStep): string => `- \`${s.location}\` (\`${s.step}\`): ${s.reason}`;
+    const nonBlocking = skippedSteps.filter((s) => !s.blocking);
+    const manualSection = complete
+      ? ''
+      : `
 > **Incomplete export.** ${blocking.length} Blueprint operation(s) could not be translated to production. This bundle was written only because \`--allow-partial\` was set. The production site will not match what \`wpai verify\` checked until you complete the steps below.
 
 ## Manual Steps Required
 
 ${blocking.map(describeSkipped).join('\n')}
 `;
-  const playgroundOnlySection =
-    nonBlocking.length === 0
-      ? ''
-      : `
+    const playgroundOnlySection =
+      nonBlocking.length === 0
+        ? ''
+        : `
 ## Not Exported (Playground-Only or Excluded, No Action Needed)
 
 ${nonBlocking.map(describeSkipped).join('\n')}
 `;
-  const deployMd = `# Production Deployment Handoff — ${siteTitle}
+    const deployMd = `# Production Deployment Handoff — ${siteTitle}
 
 Exported by \`wpai export\` from \`${path.basename(blueprintPath)}\`.
 ${manualSection}
@@ -793,8 +817,14 @@ ${playgroundOnlySection}
 ${complete ? 4 : 5}. **Configure production secrets & payments:** Set real SMTP credentials, HTTPS/TLS certificates, payment gateway keys (Stripe/WooCommerce), and automated off-site backups.
 ${complete ? 5 : 6}. **Verify admin access:** Change any default/demo passwords and confirm \`wp_get_abilities()\` / REST routes return HTTP 200.
 `;
-  fs.writeFileSync(deployMdPath, deployMd, 'utf8');
-  filesWritten.push('DEPLOY.md');
+    fs.writeFileSync(deployMdPath, deployMd, 'utf8');
+    filesWritten.push('DEPLOY.md');
+
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.renameSync(stageDir, outDir);
+  } finally {
+    fs.rmSync(stageDir, { recursive: true, force: true });
+  }
 
   for (const f of wpContentFiles) {
     filesWritten.push(f);

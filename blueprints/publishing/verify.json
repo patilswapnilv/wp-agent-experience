@@ -12,9 +12,7 @@
     "opinion"
   ],
   "required_users_min": 4,
-  "required_posts_min": {
-    "post": 4
-  },
+  "required_posts_min": 4,
   "required_rest_routes": [
     "/wp/v2/posts",
     "/wp/v2/categories",

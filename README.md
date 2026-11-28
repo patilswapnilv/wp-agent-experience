@@ -11,12 +11,12 @@
 [![WordPress Playground](https://img.shields.io/badge/WordPress%20Playground-WASM%20PHP%208.3-21759b?logo=wordpress&logoColor=white)](https://developer.wordpress.org/playground/)
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/License-GPL--2.0--or--later-blue.svg)](./LICENSE)
 
-[Quick Start](#-60-second-quick-start) ·
-[MCP Server](#-use-as-an-mcp-server-wpai-mcp) ·
-[CLI Reference](#-cli-command-reference) ·
-[Blueprints](#-6-live-verified-blueprint-presets) ·
-[63-Run Research](#-empirical-results-n--63-controlled-trials) ·
-[Architecture](#-how-it-works) ·
+[Quick Start](#60-second-quick-start) ·
+[MCP Server](#use-as-an-mcp-server-wpai-mcp) ·
+[CLI Reference](#cli-command-reference) ·
+[Blueprints](#6-live-verified-blueprint-presets) ·
+[63-Run Research](#empirical-results-n--63-controlled-trials) ·
+[Architecture](#how-it-works) ·
 [Contributing](./CONTRIBUTING.md)
 
 </div>
@@ -174,7 +174,7 @@ Evaluated on verbatim, platform-neutral prompts from [`apeatling/wp-agent-benchm
 
 ### Engineering Roadmap (`wpai-cli`)
 - [x] **v0.2.2:** Bundle `registry/` and `skills/wp-platform-selection/` in npm tarball (`#1`), harden `src/paths.ts` against `cwd` shadowing (`T6`), add `npm run test:pack` CI smoke test, and ship Stage 1 fail-safe `wpai export` (`#2` Stage 1, contributed by [`@deshabhishek007`](https://github.com/deshabhishek007)).
-- [ ] **Export Security Hardening (`T1`, `T3`, `T4`, `T5`, `T7`):** Allowlisted `wp-cli` step tokenization, symlink/traversal guards, slug regex validation, sensitive-file denylist, and `--dry-run` / confirmation prompt in `setup.sh` (see [`docs/export-security-and-parity.md`](./docs/export-security-and-parity.md)).
+- [x] **Export Security Hardening (`T1`, `T3`, `T4`, `T5`, `T7`):** Allowlisted `wp-cli` step tokenization, symlink/traversal guards, slug regex validation, sensitive-file denylist, and `--dry-run` / confirmation prompt in `setup.sh` (see [`docs/export-security-and-parity.md`](./docs/export-security-and-parity.md)).
 - [ ] **Stage 2 Materialized Export (`#2`):** Hybrid `content.wxr` + `wpai-state.json` + `MANIFEST.sha256` exporter with local attachment import and zero raw `runPHP` replay.
 - [ ] **Gate 3 Production Parity CI:** Automated Docker MariaDB + WordPress parity & idempotency suite running a shared `verify-probe.php` across all 6 presets.
 
