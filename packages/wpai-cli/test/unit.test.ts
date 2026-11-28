@@ -661,13 +661,13 @@ describe('wpai export (production handoff bridge)', () => {
     }
   });
 
-  it('T4: validates plugin/theme slugs, option names, and leading-dash values; preserves exact activatePlugin file identifiers', () => {
+  it('T4: validates plugin/theme slugs, option names, leading-dash and NUL-byte values; preserves exact activatePlugin file identifiers', () => {
     const srcDir = tmp('wpai-exp-src-');
     const outDir = tmp('wpai-exp-out-');
     try {
       writeBlueprint(srcDir, {
         plugins: ['--allow-root', 'jetpack'],
-        siteOptions: { '--exec': 'x', blogname: '--exec=phpinfo();', home: 'http://127.0.0.1' },
+        siteOptions: { '--exec': 'x', blogname: '--exec=phpinfo();', nul_flag: '\0--exec=phpinfo();', home: 'http://127.0.0.1' },
         steps: [
           { step: 'installPlugin', pluginData: { resource: 'wordpress.org/plugins', slug: 'Bad Slug' } },
           { step: 'installTheme', themeData: { resource: 'wordpress.org/themes', slug: '--force' } },
@@ -693,6 +693,7 @@ describe('wpai export (production handoff bridge)', () => {
         'siteOptions',
         'siteOptions',
         'siteOptions',
+        'siteOptions',
         'plugins[0]',
         'steps[0]',
         'steps[1]',
@@ -705,8 +706,9 @@ describe('wpai export (production handoff bridge)', () => {
     }
   });
 
-  it('T3/T5: never follows symlinks, excludes *.env* / *.sqlite* variants, and cleans reused outDir', () => {
+  it('T3/T5: never follows symlinks (including dangling), excludes *.env* / *.sqlite* variants, redacts sensitive writeFile data, and cleans reused outDir', () => {
     const srcDir = tmp('wpai-exp-src-');
+    const danglingDir = tmp('wpai-exp-dangling-');
     const secretDir = tmp('wpai-exp-secret-');
     const outDir = tmp('wpai-exp-out-');
     try {
@@ -733,6 +735,13 @@ describe('wpai export (production handoff bridge)', () => {
       fs.writeFileSync(path.join(wpContent, 'debug.log'), 'trace');
       fs.symlinkSync(secretDir, path.join(wpContent, 'plugins'));
       fs.symlinkSync(path.join(secretDir, 'id_rsa'), path.join(wpContent, 'themes', 'mine', 'key.txt'));
+
+      // Dangling root wp-content symlink must still be caught and fail safe
+      writeBlueprint(danglingDir, { steps: [{ step: 'setSiteOptions', options: { blogname: 'Dangling' } }] });
+      fs.symlinkSync(path.join(danglingDir, 'does-not-exist'), path.join(danglingDir, 'wp-content'));
+      const danglingRes = exportForProduction({ target: danglingDir, outDir: path.join(outDir, 'dangling') });
+      assert.equal(danglingRes.ok, false, 'dangling wp-content symlink must fail safe');
+      assert.ok(danglingRes.skipped_steps.some((s) => s.location === 'wp-content' && s.blocking));
 
       const strict = exportForProduction({ target: srcDir, outDir: path.join(outDir, 'strict') });
       assert.equal(strict.ok, false, 'symlinks are blocking so nothing is silently missing');
@@ -771,8 +780,12 @@ describe('wpai export (production handoff bridge)', () => {
         !bundled.some((f) => /id_rsa|key\.txt|wp-config|\.env|\.sql|\.sqlite|debug\.log|\.htaccess|stale/.test(f)),
         bundled.join(',')
       );
+      const exportedBpText = fs.readFileSync(path.join(outDir, 'blueprint.json'), 'utf8');
+      assert.doesNotMatch(exportedBpText, /API_KEY=1|Allow from all/, 'sensitive writeFile payloads must be redacted in bundled blueprint.json');
+      assert.match(exportedBpText, /REDACTED by wpai export/);
     } finally {
       fs.rmSync(srcDir, { recursive: true, force: true });
+      fs.rmSync(danglingDir, { recursive: true, force: true });
       fs.rmSync(secretDir, { recursive: true, force: true });
       fs.rmSync(outDir, { recursive: true, force: true });
     }

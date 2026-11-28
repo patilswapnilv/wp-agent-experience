@@ -91,7 +91,7 @@ describe('wpai live WordPress Playground integration smoke test', () => {
     });
   }
 
-  it('fails verification when required_posts_min, required_abilities, or required_mu_plugins are unmet', () => {
+  it('fails verification when required_posts_min (map, scalar, or malformed), required_abilities, or required_mu_plugins are unmet', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpai-verify-fail-'));
     try {
       const commerceDir = path.resolve(__dirname, '../../../../blueprints/commerce');
@@ -99,7 +99,7 @@ describe('wpai live WordPress Playground integration smoke test', () => {
       fs.writeFileSync(
         strictChecksPath,
         JSON.stringify({
-          required_posts_min: { wpai_product: 99, post: 50 },
+          required_posts_min: { wpai_product: 99, post: 50, bad_entry: 'not-a-number' },
           required_abilities: ['wpai/get-business-info'],
           required_mu_plugins: ['wpai-business.php'],
         }),
@@ -117,8 +117,24 @@ describe('wpai live WordPress Playground integration smoke test', () => {
       const byName = new Map(report.checks.map((c) => [c.name, c]));
       assert.equal(byName.get('required_posts_min:wpai_product')?.passed, false);
       assert.equal(byName.get('required_posts_min:post')?.passed, false);
+      assert.equal(byName.get('required_posts_min:bad_entry')?.passed, false);
       assert.equal(byName.get('required_ability:wpai/get-business-info')?.passed, false);
       assert.equal(byName.get('required_mu_plugin:wpai-business.php')?.passed, false);
+
+      // Scalar numeric required_posts_min (used by publishing) must also fail when unmet
+      const publishingDir = path.resolve(__dirname, '../../../../blueprints/publishing');
+      const scalarChecksPath = path.join(tmpDir, 'scalar-verify.json');
+      fs.writeFileSync(scalarChecksPath, JSON.stringify({ required_posts_min: 99 }), 'utf8');
+      const scalarRes = spawnSync(
+        process.execPath,
+        [cliEntry, 'verify', publishingDir, '--checks', scalarChecksPath, '--timeout', '90000', '--json'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+      assert.equal(scalarRes.status, 1);
+      const scalarReport = JSON.parse(scalarRes.stdout) as VerifyReport;
+      assert.equal(scalarReport.ok, false);
+      const scalarByName = new Map(scalarReport.checks.map((c) => [c.name, c]));
+      assert.equal(scalarByName.get('required_posts_min')?.passed, false);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

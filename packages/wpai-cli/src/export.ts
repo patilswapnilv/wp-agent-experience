@@ -484,6 +484,7 @@ export function exportForProduction(options: ExportOptions): ExportResult {
   const skippedSteps: SkippedStep[] = [];
   const pendingWrites: Array<{ rel: string; content: string }> = [];
   const pendingDirs: string[] = [];
+  const sensitiveWriteSteps = new Set<number>();
 
   const skip = (location: string, step: string, reason: string, blocking = true): void => {
     skippedSteps.push({ location, step, reason, blocking });
@@ -500,6 +501,10 @@ export function exportForProduction(options: ExportOptions): ExportResult {
     }
     const structured = value === null || typeof value === 'object' || typeof value === 'boolean';
     const serialized = structured ? JSON.stringify(value) : String(value);
+    if (serialized.includes('\0')) {
+      skip(location, step, `Value for option "${key}" contains a NUL byte and cannot be passed safely; set it manually.`);
+      return;
+    }
     if (serialized.startsWith('--')) {
       // WP-CLI would parse a value starting with `--` as a flag, even when shell-quoted (T4).
       skip(location, step, `Value for option "${key}" starts with "--" and cannot be passed safely; set it manually.`);
@@ -562,6 +567,9 @@ export function exportForProduction(options: ExportOptions): ExportResult {
     switch (name) {
       case 'writeFile': {
         const destPath = typeof step.path === 'string' ? step.path : '';
+        if (destPath && isSensitiveFileName(path.posix.basename(destPath))) {
+          sensitiveWriteSteps.add(i);
+        }
         if (!destPath.startsWith('/wordpress/wp-content/')) {
           skip(location, name, `Writes outside wp-content/ (${destPath || 'no path'}); only wp-content/ files are exported.`);
           break;
@@ -572,6 +580,7 @@ export function exportForProduction(options: ExportOptions): ExportResult {
           break;
         }
         if (isSensitiveFileName(path.posix.basename(relInside))) {
+          sensitiveWriteSteps.add(i);
           skip(location, name, `Sensitive file name (${destPath}); not exported. Create it manually on production if needed.`);
           break;
         }
@@ -705,11 +714,11 @@ export function exportForProduction(options: ExportOptions): ExportResult {
   // 5. Plan the local sibling wp-content/ copy (symlinks and sensitive files are never copied)
   const localWpContent = path.join(baseDir, 'wp-content');
   const filesToCopy: string[] = [];
-  if (fs.existsSync(localWpContent)) {
-    const st = fs.lstatSync(localWpContent);
-    if (st.isSymbolicLink()) {
+  const localWpContentStat = fs.lstatSync(localWpContent, { throwIfNoEntry: false });
+  if (localWpContentStat) {
+    if (localWpContentStat.isSymbolicLink()) {
       skip('wp-content', 'wp-content', 'Local wp-content/ is a symbolic link and was not followed; copy the real directory manually.');
-    } else if (st.isDirectory()) {
+    } else if (localWpContentStat.isDirectory()) {
       planWpContentCopy(localWpContent, '', filesToCopy, skip);
     }
   }
@@ -763,9 +772,22 @@ export function exportForProduction(options: ExportOptions): ExportResult {
       }
     }
 
-    // 7. Copy blueprint.json for reference
+    // 7. Copy blueprint.json for reference (redacting any refused sensitive writeFile payloads)
     const bpOut = path.join(stageDir, 'blueprint.json');
-    fs.copyFileSync(blueprintPath, bpOut);
+    if (sensitiveWriteSteps.size === 0) {
+      fs.copyFileSync(blueprintPath, bpOut);
+    } else {
+      const sanitizedBp = structuredClone(bp);
+      if (Array.isArray(sanitizedBp.steps)) {
+        for (const idx of sensitiveWriteSteps) {
+          const s = sanitizedBp.steps[idx];
+          if (s && typeof s === 'object') {
+            s.data = '[REDACTED by wpai export: sensitive file excluded]';
+          }
+        }
+      }
+      fs.writeFileSync(bpOut, `${JSON.stringify(sanitizedBp, null, 2)}\n`, 'utf8');
+    }
     filesWritten.push('blueprint.json');
 
     // 8. Write executable setup.sh WP-CLI handoff script (guarded by --dry-run / --yes, T7)
